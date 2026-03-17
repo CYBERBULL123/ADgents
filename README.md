@@ -1,8 +1,8 @@
 # ⚡ ADgents — Autonomous Agent Platform
 
-> Build, deploy, and talk to autonomous AI agents — each with their own **persona**, **memory**, **expertise**, and **skills**.
-
 ![ADgents](docs/img.png)
+
+**[⭐ View the official repository on GitHub](https://github.com/CYBERBULL123/ADgents)**
 
 ---
 
@@ -74,11 +74,11 @@ print(task.result)
 
 | Template | Avatar | Role | Best For |
 |----------|--------|------|----------|
-| `researcher` | 🔬 | Dr. Aria — Research Scientist | Research, analysis, literature review |
-| `engineer` | ⚙️ | Kai — Senior Software Engineer | Code, system design, technical problems |
-| `analyst` | 📊 | Morgan — Business Analyst | Data, strategy, business insights |
-| `assistant` | ✨ | Nova — Personal Assistant | General tasks, scheduling, writing |
-| `strategist` | 🧭 | Atlas — Strategic Advisor | Planning, leadership, competitive analysis |
+| `researcher` | 🔬 | Dr. Aditi — Research Scientist | Research, analysis, literature review |
+| `engineer` | ⚙️ | Karan — Senior Software Engineer | Code, system design, technical problems |
+| `analyst` | 📊 | Meera — Business Analyst | Data, strategy, business insights |
+| `assistant` | ✨ | Naveen — Personal Assistant | General tasks, scheduling, writing |
+| `strategist` | 🧭 | Arjun — Strategic Advisor | Planning, leadership, competitive analysis |
 
 ---
 
