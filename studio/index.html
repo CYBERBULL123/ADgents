@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ADgents — Autonomous Agent Studio</title>
+    <meta name="description"
+        content="Create and manage autonomous AI agents with unique personas, memories, skills and domain expertise. Your personal AGI team." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+    <!-- Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+</head>
+
+<body>
+    <!-- Animated background -->
+    <div class="bg-grid"></div>
+    <div class="bg-glow bg-glow-1"></div>
+    <div class="bg-glow bg-glow-2"></div>
+    <div class="bg-glow bg-glow-3"></div>
+
+    <!-- Sidebar overlay (mobile) -->
+    <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+    <!-- Sidebar -->
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-logo">
+            <div class="logo-icon">⚡</div>
+            <div class="logo-text">
+                <span class="logo-name">ADgents</span>
+                <span class="logo-tag">v1.0.0</span>
+            </div>
+            <!-- Close button (mobile only) -->
+            <button class="sidebar-close-btn" id="sidebar-close-btn" onclick="closeSidebar()"
+                aria-label="Close navigation">✕</button>
+        </div>
+
+        <div class="sidebar-section-label">Navigation</div>
+        <a class="nav-item active" data-page="dashboard" onclick="navigate('dashboard');closeSidebar()">
+            <span class="nav-icon">🏠</span>
+            <span>Dashboard</span>
+        </a>
+        <a class="nav-item" data-page="agents" onclick="navigate('agents');closeSidebar()">
+            <span class="nav-icon">🤖</span>
+            <span>Agents</span>
+            <span class="nav-badge" id="agent-count-badge">0</span>
+        </a>
+        <a class="nav-item" data-page="builder" onclick="navigate('builder');closeSidebar()">
+            <span class="nav-icon">✨</span>
+            <span>Build Agent</span>
+        </a>
+        <a class="nav-item" data-page="chat" onclick="navigate('chat');closeSidebar()">
+            <span class="nav-icon">💬</span>
+            <span>Chat</span>
+        </a>
+        <a class="nav-item" data-page="tasks" onclick="navigate('tasks');closeSidebar()">
+            <span class="nav-icon">⚡</span>
+            <span>Tasks</span>
+        </a>
+        <a class="nav-item" data-page="history" onclick="navigate('history');closeSidebar()">
+            <span class="nav-icon">📜</span>
+            <span>History</span>
+            <span class="nav-badge" id="history-count-badge" style="display:none">0</span>
+        </a>
+        <a class="nav-item" data-page="memory" onclick="navigate('memory');closeSidebar()">
+            <span class="nav-icon">🧠</span>
+            <span>Memory</span>
+        </a>
+        <a class="nav-item" data-page="skills" onclick="navigate('skills');closeSidebar()">
+            <span class="nav-icon">🛠️</span>
+            <span>Skills</span>
+        </a>
+
+        <div class="sidebar-section-label">Settings</div>
+        <a class="nav-item" data-page="settings" onclick="navigate('settings');closeSidebar()">
+            <span class="nav-icon">⚙️</span>
+            <span>Settings</span>
+        </a>
+        <a class="nav-item" data-page="docs" onclick="navigate('docs');closeSidebar()">
+            <span class="nav-icon">📚</span>
+            <span>Docs</span>
+        </a>
+
+        <div class="sidebar-footer">
+            <div class="status-dot" id="api-status-dot"></div>
+            <span id="api-status-text">Connecting...</span>
+        </div>
+    </nav>
+
+    <!-- Main content -->
+    <main class="main-content">
+        <!-- Header -->
+        <header class="topbar">
+            <div class="topbar-left">
+                <!-- Hamburger (mobile only) -->
+                <button class="hamburger-btn" id="hamburger-btn" onclick="openSidebar()" aria-label="Open navigation">
+                    <span class="ham-line"></span>
+                    <span class="ham-line"></span>
+                    <span class="ham-line"></span>
+                </button>
+                <div class="page-title" id="page-title">Dashboard</div>
+                <div class="breadcrumb" id="breadcrumb">Overview of your agent fleet</div>
+            </div>
+            <div class="topbar-right">
+                <button class="btn btn-ghost" onclick="refreshAll()">
+                    <span>🔄</span> Refresh
+                </button>
+                <button class="btn btn-primary" onclick="navigate('builder')">
+                    <span>+</span> New Agent
+                </button>
+            </div>
+        </header>
+
+        <!-- Pages -->
+        <div class="page-container">
+
+            <!-- ── DASHBOARD ── -->
+            <section class="page active" id="page-dashboard">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">🤖</div>
+                        <div class="stat-value" id="stat-agents">0</div>
+                        <div class="stat-label">Active Agents</div>
+                        <div class="stat-trend">↑ Ready to work</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">⚡</div>
+                        <div class="stat-value" id="stat-skills">0</div>
+                        <div class="stat-label">Skills Available</div>
+                        <div class="stat-trend">↑ Tools ready</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🧠</div>
+                        <div class="stat-value" id="stat-memories">0</div>
+                        <div class="stat-label">Total Memories</div>
+                        <div class="stat-trend">↑ Growing</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🌐</div>
+                        <div class="stat-value" id="stat-providers">0</div>
+                        <div class="stat-label">LLM Providers</div>
+                        <div class="stat-trend">Available</div>
+                    </div>
+                </div>
+
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>🚀 Quick Start</h3>
+                        </div>
+                        <div class="quickstart-grid">
+                            <div class="quickstart-item" onclick="quickCreateAgent('researcher')">
+                                <div class="qs-avatar">🔬</div>
+                                <div class="qs-name">Dr. Aria</div>
+                                <div class="qs-role">Researcher</div>
+                            </div>
+                            <div class="quickstart-item" onclick="quickCreateAgent('engineer')">
+                                <div class="qs-avatar">⚙️</div>
+                                <div class="qs-name">Kai</div>
+                                <div class="qs-role">Engineer</div>
+                            </div>
+                            <div class="quickstart-item" onclick="quickCreateAgent('analyst')">
+                                <div class="qs-avatar">📊</div>
+                                <div class="qs-name">Morgan</div>
+                                <div class="qs-role">Analyst</div>
+                            </div>
+                            <div class="quickstart-item" onclick="quickCreateAgent('assistant')">
+                                <div class="qs-avatar">✨</div>
+                                <div class="qs-name">Nova</div>
+                                <div class="qs-role">Assistant</div>
+                            </div>
+                            <div class="quickstart-item" onclick="quickCreateAgent('strategist')">
+                                <div class="qs-avatar">🧭</div>
+                                <div class="qs-name">Atlas</div>
+                                <div class="qs-role">Strategist</div>
+                            </div>
+                            <div class="quickstart-item" onclick="navigate('builder')">
+                                <div class="qs-avatar">✍️</div>
+                                <div class="qs-name">Custom</div>
+                                <div class="qs-role">Build Your Own</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>📡 System Status</h3>
+                        </div>
+                        <div class="status-list" id="system-status-list">
+                            <div class="status-item">
+                                <span class="status-name">API Server</span>
+                                <span class="badge badge-green" id="status-api">Connecting...</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-name">LLM Providers</span>
+                                <span class="badge badge-blue" id="status-llm">—</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-name">Memory DB</span>
+                                <span class="badge badge-green">SQLite Ready</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-name">Skills Engine</span>
+                                <span class="badge badge-green">Active</span>
+                            </div>
+                        </div>
+
+                        <div class="card-header" style="margin-top:1.5rem">
+                            <h3>🤖 Active Agents</h3>
+                        </div>
+                        <div id="dashboard-agents-list">
+                            <div class="empty-state-small">No agents yet. Create your first agent!</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── AGENTS ── -->
+            <section class="page" id="page-agents">
+                <div class="agents-toolbar">
+                    <input type="text" class="search-input" placeholder="🔍 Search agents..." id="agent-search"
+                        oninput="filterAgents(this.value)" />
+                </div>
+                <div class="agents-grid" id="agents-grid">
+                    <div class="empty-state">
+                        <div class="empty-icon">🤖</div>
+                        <div class="empty-title">No Agents Yet</div>
+                        <div class="empty-desc">Create your first AI agent to get started</div>
+                        <button class="btn btn-primary" onclick="navigate('builder')">Create First Agent</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── BUILDER ── -->
+            <section class="page" id="page-builder">
+                <div class="builder-layout">
+                    <div class="builder-sidebar">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>⚡ Templates</h3>
+                            </div>
+                            <div class="template-list" id="template-list"></div>
+                        </div>
+                    </div>
+
+                    <div class="builder-main">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>✨ Design Your Agent</h3>
+                            </div>
+                            <div class="builder-preview">
+                                <div class="preview-avatar" id="preview-avatar">🤖</div>
+                                <div class="preview-info">
+                                    <div class="preview-name" id="preview-name">Your Agent</div>
+                                    <div class="preview-role" id="preview-role">Define the role below</div>
+                                </div>
+                            </div>
+
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label>Agent Name</label>
+                                    <input type="text" id="build-name" placeholder="e.g. Aria, Kai, Nova..."
+                                        oninput="updatePreview()" />
+                                </div>
+                                <div class="form-group">
+                                    <label>Avatar (Emoji)</label>
+                                    <input type="text" id="build-avatar" value="🤖" maxlength="2"
+                                        oninput="updatePreview()" />
+                                </div>
+                                <div class="form-group full-width">
+                                    <label>Role / Title</label>
+                                    <input type="text" id="build-role"
+                                        placeholder="e.g. Senior Software Engineer, Research Scientist..."
+                                        oninput="updatePreview()" />
+                                </div>
+                                <div class="form-group full-width">
+                                    <label>Backstory & Personality</label>
+                                    <textarea id="build-backstory" rows="3"
+                                        placeholder="Write your agent's backstory — their experience, what they're great at..."></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label>Expertise Domains (comma-separated)</label>
+                                    <input type="text" id="build-expertise"
+                                        placeholder="e.g. Python, Data Science, Writing" />
+                                </div>
+                                <div class="form-group">
+                                    <label>Personality Traits (comma-separated)</label>
+                                    <input type="text" id="build-traits"
+                                        placeholder="e.g. analytical, creative, empathetic" />
+                                </div>
+                                <div class="form-group">
+                                    <label>Tone</label>
+                                    <select id="build-tone">
+                                        <option value="professional">Professional</option>
+                                        <option value="casual">Casual & Friendly</option>
+                                        <option value="technical">Technical</option>
+                                        <option value="academic">Academic</option>
+                                        <option value="creative">Creative</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Autonomy Level: <span id="autonomy-val">3</span>/5</label>
+                                    <input type="range" id="build-autonomy" min="1" max="5" value="3"
+                                        oninput="document.getElementById('autonomy-val').textContent=this.value" />
+                                    <div class="range-labels">
+                                        <span>Always Ask</span>
+                                        <span>Fully Autonomous</span>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Creativity: <span id="creativity-val">70</span>%</label>
+                                    <input type="range" id="build-creativity" min="0" max="100" value="70"
+                                        oninput="document.getElementById('creativity-val').textContent=this.value" />
+                                    <div class="range-labels">
+                                        <span>Precise</span>
+                                        <span>Creative</span>
+                                    </div>
+                                </div>
+
+                                <div class="form-group full-width">
+                                    <label>Available Skills</label>
+                                    <div class="skills-checkbox-grid" id="build-skills-grid"></div>
+                                </div>
+                            </div>
+
+                            <div class="builder-actions">
+                                <button class="btn btn-ghost" onclick="resetBuilder()">Reset</button>
+                                <button class="btn btn-primary btn-large" onclick="createAgent()">
+                                    ✨ Create Agent
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── CHAT ── -->
+            <section class="page" id="page-chat">
+                <div class="chat-layout">
+                    <div class="chat-sidebar">
+                        <div class="card h-full">
+                            <div class="card-header">
+                                <h3>🤖 Select Agent</h3>
+                            </div>
+                            <div class="agent-picker" id="chat-agent-picker">
+                                <div class="empty-state-small">Create an agent first</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="chat-main">
+                        <div class="chat-agent-header" id="chat-agent-header">
+                            <div class="chat-agent-avatar" id="chat-avatar">🤖</div>
+                            <div>
+                                <div class="chat-agent-name" id="chat-agent-name">Select an agent</div>
+                                <div class="chat-agent-status" id="chat-agent-status">
+                                    <span class="dot dot-green"></span> Ready
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="messages-container" id="messages-container">
+                            <div class="welcome-message">
+                                <div class="welcome-icon">💬</div>
+                                <div class="welcome-title">Start a Conversation</div>
+                                <div class="welcome-desc">Select an agent from the left and start chatting</div>
+                            </div>
+                        </div>
+
+                        <div class="chat-input-area">
+                            <div class="chat-input-wrapper">
+                                <textarea id="chat-input" class="chat-input" placeholder="Message your agent..."
+                                    rows="1" onkeydown="handleChatKey(event)"></textarea>
+                                <button class="send-btn" id="send-btn" onclick="sendMessage()">
+                                    <span>➤</span>
+                                </button>
+                            </div>
+                            <div class="chat-actions">
+                                <button class="btn btn-ghost btn-xs" onclick="runAutonomousTask()">⚡ Run Task</button>
+                                <button class="btn btn-ghost btn-xs" onclick="resetChatSession()">🔄 New
+                                    Session</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── TASKS ── -->
+            <section class="page" id="page-tasks">
+
+                <!-- Control bar -->
+                <div class="task-control-bar">
+                    <div class="task-agent-group">
+                        <label class="task-label">Agent</label>
+                        <select id="task-agent-select" class="task-select">
+                            <option value="">— Select Agent —</option>
+                        </select>
+                    </div>
+
+                    <div class="task-input-group">
+                        <label class="task-label">Task Description</label>
+                        <textarea id="task-description" class="task-textarea"
+                            placeholder="Describe the task — e.g. Research the latest AI trends and write a summary report"
+                            rows="3"></textarea>
+                    </div>
+
+                    <div class="task-options-group">
+                        <div class="task-iter-row">
+                            <label class="task-label">Iterations: <strong id="max-iter-val">10</strong></label>
+                            <input type="range" id="task-max-iter" min="3" max="20" value="10"
+                                oninput="document.getElementById('max-iter-val').textContent=this.value" />
+                            <div class="task-iter-marks"><span>3</span><span>20</span></div>
+                        </div>
+                        <button class="btn btn-primary task-run-btn" onclick="startTask()">
+                            ⚡ Run Autonomous Task
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Live task feed -->
+                <div class="task-feed-card">
+                    <div class="task-feed-header">
+                        <div class="task-feed-title">
+                            <span id="task-feed-icon">📋</span>
+                            <span id="task-feed-heading">Task Steps</span>
+                        </div>
+                        <div class="task-feed-meta">
+                            <span class="badge badge-blue" id="task-status-badge" style="display:none">Running</span>
+                            <button class="btn btn-ghost btn-xs" onclick="clearTaskFeed()">Clear</button>
+                        </div>
+                    </div>
+                    <div class="task-steps" id="task-steps">
+                        <div class="task-empty-state">
+                            <div class="task-empty-icon">⚡</div>
+                            <div class="task-empty-title">Ready for Tasks</div>
+                            <div class="task-empty-desc">Select an agent, describe the task, then hit Run.<br>You'll see
+                                the agent's thoughts and actions here in real-time.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── TASK RESULT PANEL ── -->
+                <div class="task-result-panel" id="task-result-panel" style="display:none">
+                    <div class="task-result-header">
+                        <div class="task-result-title">
+                            <span class="task-result-icon">✅</span>
+                            <div>
+                                <div class="task-result-label">Task Complete</div>
+                                <div class="task-result-agent" id="task-result-agent-name"></div>
+                            </div>
+                        </div>
+                        <div class="task-result-actions">
+                            <button class="btn btn-ghost btn-xs" onclick="copyTaskResult()" title="Copy result">📋
+                                Copy</button>
+                            <button class="btn btn-ghost btn-xs" onclick="closeTaskResult()" title="Dismiss">✕</button>
+                        </div>
+                    </div>
+                    <div class="task-result-body md-content" id="task-result-body"></div>
+                </div>
+
+            </section>
+
+            <!-- ── HISTORY ── -->
+            <section class="page" id="page-history">
+
+                <!-- Stats strip -->
+                <div class="history-stats" id="history-stats">
+                    <div class="hist-stat">
+                        <div class="hist-stat-val" id="hstat-total">0</div>
+                        <div class="hist-stat-lab">Total Tasks</div>
+                    </div>
+                    <div class="hist-stat">
+                        <div class="hist-stat-val hist-green" id="hstat-completed">0</div>
+                        <div class="hist-stat-lab">Completed</div>
+                    </div>
+                    <div class="hist-stat">
+                        <div class="hist-stat-val hist-red" id="hstat-failed">0</div>
+                        <div class="hist-stat-lab">Failed</div>
+                    </div>
+                    <div class="hist-stat">
+                        <div class="hist-stat-val" id="hstat-avg">0s</div>
+                        <div class="hist-stat-lab">Avg Duration</div>
+                    </div>
+                </div>
+
+                <!-- Search + filter bar -->
+                <div class="history-toolbar">
+                    <input type="text" class="history-search" id="history-search"
+                        placeholder="🔍 Search task text or results..." oninput="filterHistoryDebounced(this.value)" />
+                    <select id="history-filter-agent" class="hist-select" onchange="loadHistory()">
+                        <option value="">All Agents</option>
+                    </select>
+                    <select id="history-filter-status" class="hist-select" onchange="loadHistory()">
+                        <option value="">All Statuses</option>
+                        <option value="completed">✅ Completed</option>
+                        <option value="failed">❌ Failed</option>
+                    </select>
+                    <button class="btn btn-ghost btn-xs" onclick="loadHistory()">🔄 Refresh</button>
+                </div>
+
+                <!-- Task list -->
+                <div id="history-list" class="history-list">
+                    <div class="task-empty-state">
+                        <div class="task-empty-icon">📜</div>
+                        <div class="task-empty-title">No Tasks Yet</div>
+                        <div class="task-empty-desc">Run an autonomous task and it will appear here automatically.</div>
+                    </div>
+                </div>
+
+            </section>
+
+            <!-- ── MEMORY ── -->
+            <section class="page" id="page-memory">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🧠 Agent Memory</h3>
+                        <div class="header-actions">
+                            <select id="memory-agent-select" onchange="loadMemory()">
+                                <option value="">— Select Agent —</option>
+                            </select>
+                            <input type="text" id="memory-search" placeholder="🔍 Search memories..."
+                                oninput="searchMemory(this.value)" />
+                        </div>
+                    </div>
+                    <div class="memory-grid" id="memory-grid">
+                        <div class="empty-state-small">Select an agent to view their memories</div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top:1.5rem">
+                    <div class="card-header">
+                        <h3>📚 Teach Agent</h3>
+                    </div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Agent</label>
+                            <select id="learn-agent-select">
+                                <option value="">— Select Agent —</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Topic</label>
+                            <input type="text" id="learn-topic" placeholder="e.g. company-info, project-context"
+                                value="general" />
+                        </div>
+                        <div class="form-group full-width">
+                            <label>Knowledge / Fact</label>
+                            <textarea id="learn-fact" rows="3"
+                                placeholder="Teach the agent something new..."></textarea>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="teachAgent()">📚 Teach Agent</button>
+                </div>
+            </section>
+
+            <!-- ── SKILLS ── -->
+            <section class="page" id="page-skills">
+
+                <!-- Create Custom Skill panel -->
+                <div class="card skill-create-card">
+                    <div class="skill-create-header" onclick="toggleSkillForm()">
+                        <div class="skill-create-title">
+                            <span class="skill-create-icon">🔧</span>
+                            <div>
+                                <div style="font-weight:700;font-size:1rem">Create Custom Skill</div>
+                                <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.15rem">Add a new
+                                    tool that any agent can use</div>
+                            </div>
+                        </div>
+                        <button class="btn btn-primary btn-xs" id="skill-form-toggle-btn">+ Add Skill</button>
+                    </div>
+
+                    <div class="skill-create-form" id="skill-create-form" style="display:none">
+                        <!-- AI Generation Section -->
+                        <div class="skill-ai-section" style="background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.15); border-radius: 12px; padding: 1.5rem; margin-bottom: 0.5rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
+                                <span style="font-size: 1.2rem;">✨</span>
+                                <strong style="color: var(--text-primary); font-size: 1.05rem;">Generate with AI</strong>
+                            </div>
+                            <div style="display: flex; gap: 0.75rem; flex-direction: column;">
+                                <textarea id="skill-ai-prompt" style="flex: 1; min-height: 60px; background: rgba(0,0,0,0.2); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; color: var(--text-primary); padding: 0.75rem 1rem; font-family: var(--font); font-size: 0.9rem; resize: vertical; outline: none; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);" placeholder="Describe what the skill should do (e.g. 'Fetch the top 5 news articles from HackerNews')..." rows="2" onfocus="this.style.borderColor='rgba(139, 92, 246, 0.8)'" onblur="this.style.borderColor='rgba(139, 92, 246, 0.3)'"></textarea>
+                                <button class="btn btn-primary" id="generate-skill-btn" onclick="generateSkillFromAI()" style="align-self: flex-end; padding: 0.6rem 1.2rem; font-size: 0.9rem;">
+                                    <span>✨ Generate Code</span>
+                                </button>
+                            </div>
+                            <div id="skill-ai-status" style="font-size: 0.85rem; margin-top: 1rem; color: var(--text-secondary); display: none;">Generating code... ⏳</div>
+                        </div>
+
+                        <div class="skill-form-divider" style="display: flex; align-items: center; gap: 1rem; margin: 2.5rem 0 2rem 0; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px;">
+                            <span style="flex: 1; height: 1px; background: var(--border);"></span>
+                            OR EDIT MANUALLY
+                            <span style="flex: 1; height: 1px; background: var(--border);"></span>
+                        </div>
+
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Skill Name <span style="color:var(--red)">*</span></label>
+                                <input type="text" id="skill-name" placeholder="e.g. lookup_employee (no spaces)" />
+                            </div>
+                            <div class="form-group">
+                                <label>Category</label>
+                                <select id="skill-category">
+                                    <option value="custom">custom</option>
+                                    <option value="information">information</option>
+                                    <option value="integration">integration</option>
+                                    <option value="data">data</option>
+                                    <option value="utility">utility</option>
+                                    <option value="business">business</option>
+                                    <option value="text">text</option>
+                                </select>
+                            </div>
+                            <div class="form-group full-width">
+                                <label>Description <span style="color:var(--red)">*</span></label>
+                                <input type="text" id="skill-description"
+                                    placeholder="What does this skill do? Be clear — the agent reads this to decide when to use it." />
+                            </div>
+                            <div class="form-group full-width">
+                                <label>Parameters (JSON Schema)</label>
+                                <textarea id="skill-parameters" rows="5" class="code-textarea"
+                                    placeholder='{
+  "type": "object",
+  "properties": {
+    "query": {"type": "string", "description": "The input"}
+  },
+  "required": ["query"]
+}'>{"type":"object","properties":{"input":{"type":"string","description":"Input value"}},"required":["input"]}</textarea>
+                            </div>
+                            <div class="form-group full-width">
+                                <label>Python Handler Code <span style="color:var(--red)">*</span></label>
+                                <div class="code-editor-hint">Write a Python function. Use
+                                    <code>def handler(...):</code> — it must match your parameter names above.
+                                </div>
+                                <textarea id="skill-handler-code" rows="8" class="code-textarea"
+                                    placeholder="def handler(input: str) -> str:\n    # Your logic here\n    return f'Processed: {input}'">def handler(input: str) -> str:
+    # Write your custom skill logic here
+    result = f"Processed: {input}"
+    return result</textarea>
+                            </div>
+                        </div>
+                        <div class="skill-form-actions">
+                            <button class="btn btn-ghost" onclick="toggleSkillForm()">Cancel</button>
+                            <button class="btn btn-primary" onclick="createCustomSkill()">🔧 Register Skill</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Existing skills grid -->
+                <div class="skills-section-label">Available Skills (<span id="skills-count">0</span>)</div>
+                <div class="skills-grid-full" id="skills-grid-full"></div>
+
+            </section>
+
+            <!-- ── SETTINGS ── -->
+            <section class="page" id="page-settings">
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>🤖 LLM Provider</h3>
+                        </div>
+                        <div class="form-group">
+                            <label>Provider</label>
+                            <select id="llm-provider" onchange="updateModelHint()">
+                                <option value="openai">OpenAI (GPT-4o)</option>
+                                <option value="gemini">Google Gemini</option>
+                                <option value="claude">✨ Anthropic Claude</option>
+                                <option value="ollama">Ollama (Local)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>API Key</label>
+                            <input type="password" id="llm-api-key" placeholder="sk-..." />
+                        </div>
+                        <div class="form-group">
+                            <label>Model</label>
+                            <input type="text" id="llm-model" placeholder="gpt-4o-mini" />
+                        </div>
+                        <button class="btn btn-primary" onclick="saveLLMConfig()">💾 Save & Connect</button>
+                        <div id="llm-config-status" style="margin-top:1rem"></div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>📡 Provider Status</h3>
+                        </div>
+                        <div id="provider-status-list"></div>
+
+                        <div class="card-header" style="margin-top:1.5rem">
+                            <h3>ℹ️ About ADgents</h3>
+                        </div>
+                        <div class="about-info">
+                            <p><strong>ADgents</strong> is an autonomous AI agent platform where each agent has a unique
+                                persona, persistent memory, domain expertise, and real-world skills.</p>
+                            <div class="about-badges">
+                                <span class="badge badge-purple">v1.0.0</span>
+                                <span class="badge badge-blue">Python 3.14</span>
+                                <span class="badge badge-green">FastAPI</span>
+                                <span class="badge badge-orange">Open Source</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── DOCS ── -->
+            <section class="page" id="page-docs">
+                <div class="docs-layout">
+                    <div class="docs-sidebar">
+                        <div class="docs-sidebar-title">Documentation</div>
+                        <ul class="docs-nav-list" id="docs-nav-list">
+                            <!-- Docs nav items get injected here -->
+                        </ul>
+                    </div>
+                    <div class="docs-content-area card">
+                        <div class="docs-header" id="docs-header" style="display:none; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 1.5rem;">
+                            <h2 style="font-size: 1.5rem; font-weight: 700" id="docs-title">Reading</h2>
+                        </div>
+                        <div id="docs-content" class="md-content">
+                            <div class="empty-state-small" style="text-align:left; padding:0">Loading documentation...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+    <!-- Confirm Action Modal -->
+    <div class="modal-overlay" id="confirm-action-modal" style="display:none; z-index: 1000">
+        <div class="modal" style="max-width: 400px;">
+            <div class="modal-header" style="margin-bottom: 1rem;">
+                <div class="modal-title" style="color: var(--text-primary)">⚠️ Confirmation Required</div>
+                <button class="modal-close" onclick="closeConfirmModal()">✕</button>
+            </div>
+            <div class="modal-body" id="confirm-modal-message" style="margin-bottom: 1.5rem; font-size: 0.95rem; line-height: 1.5;">Are you sure?</div>
+            <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
+                <button class="btn btn-ghost" id="confirm-modal-no" onclick="closeConfirmModal()">Cancel</button>
+                <button class="btn btn-danger" id="confirm-modal-yes">Yes, Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Skill detail modal -->
+    <div class="modal-overlay" id="skill-modal" onclick="closeSkillModal(event)" style="display:none">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title" id="modal-skill-name">Skill Name</div>
+                <button class="modal-close"
+                    onclick="document.getElementById('skill-modal').style.display='none'">✕</button>
+            </div>
+            <div class="modal-body" id="modal-skill-body"></div>
+        </div>
+    </div>
+
+    <script src="app.js?v=9"></script>
+</body>
+
+</html>
