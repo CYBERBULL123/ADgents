@@ -1,8 +1,8 @@
 # ⚡ ADgents — Autonomous Agent Platform
 
-![ADgents](docs/img.png)
+> Build, deploy, and talk to autonomous AI agents — each with their own **persona**, **memory**, **expertise**, and **skills**.
 
-**[⭐ View the official repository on GitHub](https://github.com/CYBERBULL123/ADgents)**
+![ADgents](docs/img.png)
 
 ---
 
