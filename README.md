@@ -22,9 +22,10 @@ ADgents treats AI agents like **real people** — each agent has:
 
 ## 🚀 Quick Start
 
-### 1. Start the Server
+### 1. Install & Start Server
 
 ```bash
+pip install -r requirements.txt
 python start.py
 ```
 

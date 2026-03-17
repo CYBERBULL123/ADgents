@@ -15,7 +15,12 @@ git clone https://github.com/CYBERBULL123/ADgents
 cd ADgents
 ```
 
-2. **Run the startup sequence:**
+2. **Install dependencies:**
+```bash
+pip install -r requirements.txt
+```
+
+3. **Run the startup sequence:**
 ```bash
 python start.py
 ```
