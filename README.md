@@ -2,7 +2,7 @@
 
 > Build, deploy, and talk to autonomous AI agents — each with their own **persona**, **memory**, **expertise**, and **skills**.
 
-![ADgents](.github/banner.png)
+![ADgents](docs/img.png)
 
 ---
 
