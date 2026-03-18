@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adgents"
+version = "1.0.0"
+description = "Build, deploy, and talk to autonomous AI agents with persona, memory, and skills."
+readme = "README.md"
+authors = [
+  { name = "CYBERBULL123" }
+]
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Development Status :: 4 - Beta",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence"
+]
+keywords = ["ai", "agents", "llm", "mcp", "automation", "autonomous"]
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn>=0.30.1",
+    "pydantic>=2.7.4",
+    "httpx>=0.27.0",
+    "sqlalchemy>=2.0.30",
+    "aiofiles>=24.1.0"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/CYBERBULL123/ADgents"
+"Bug Tracker" = "https://github.com/CYBERBULL123/ADgents/issues"
+
+[tool.setuptools]
+packages = ["core", "sdk"]
+
+[project.scripts]
+adgents = "start:check_environment"

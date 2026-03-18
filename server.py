@@ -25,6 +25,8 @@ from core.llm import LLM_ROUTER
 from core.memory import AgentMemory
 from core.agent_store import save_agent_persona, load_all_personas, delete_agent_persona
 from core.task_db import save_task, list_tasks, get_task, delete_task, task_stats
+from core.crew import Crew
+from core.mcp_server import MCPServer
 
 # ─── Pydantic Models ──────────────────────────────────────────────────────────
 
@@ -40,6 +42,10 @@ class TaskRequest(BaseModel):
     task: str
     agent_id: str
     max_iterations: Optional[int] = 10
+
+class CrewRunRequest(BaseModel):
+    task: str
+    agent_ids: List[str]
 
 class LearnRequest(BaseModel):
     agent_id: str
@@ -658,6 +664,34 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str):
     except WebSocketDisconnect:
         await manager.disconnect(websocket, agent_id)
 
+
+# ─── Multi-Agent Crew ─────────────────────────────────────────────────────────
+
+@app.post("/api/crew/run")
+async def run_crew(req: CrewRunRequest):
+    """Run an autonomous task using a multi-agent Crew."""
+    crew_agents = [agents[a_id] for a_id in req.agent_ids if a_id in agents]
+    if len(crew_agents) < 2:
+        raise HTTPException(400, "Crew requires at least 2 active agents")
+    
+    crew = Crew(name="Ad-hoc Crew", agents=crew_agents)
+    
+    # We will just run it in a thread executor
+    loop = asyncio.get_event_loop()
+    import concurrent.futures
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    
+    try:
+        run_obj = await loop.run_in_executor(executor, crew.run, req.task)
+        return {"success": True, "run": run_obj.to_dict()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# ─── MCP Endpoint ─────────────────────────────────────────────────────────────
+
+# Expose all currently running agents and global skills
+mcp_server = MCPServer(skill_registry=SKILL_REGISTRY, agents=list(agents.values()))
+app.include_router(mcp_server.get_fastapi_router(), prefix="/mcp")
 
 # ─── Run ─────────────────────────────────────────────────────────────────────
 

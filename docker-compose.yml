@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  adgents:
+    build: .
+    image: adgents:latest
+    container_name: adgents_server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data        # Persist memory databases
+      - ./.env:/app/.env        # Map your API keys
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    restart: unless-stopped

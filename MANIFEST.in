@@ -1,0 +1,5 @@
+include README.md
+include requirements.txt
+recursive-include docs *
+recursive-include studio *
+recursive-include data *
