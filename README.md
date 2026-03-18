@@ -17,6 +17,8 @@ ADgents treats AI agents like **real people** — each agent has:
 | 🛠️ **Skills** | Web search, code execution, file I/O, API calls, and more |
 | 📚 **Expertise** | Domain knowledge they specialize in |
 | 🔄 **Autonomy** | ReAct loop: Think → Act → Observe → Reflect |
+| 🤝 **Crews** | Orchestrate multiple agents to collaborate on sub-tasks |
+| 🔌 **MCP + ADK** | Expose skills as MCP Tools or deploy as Google ADK nodes |
 
 ---
 

@@ -1441,7 +1441,7 @@ async function loadDocs() {
         state.docsLoaded = true;
         
         // Preferred ordering if these files exist
-        const order = ['index', 'quickstart', 'architecture', 'studio', 'sdk', 'skills', 'use_cases'];
+        const order = ['index', 'quickstart', 'architecture', 'studio', 'sdk', 'skills', 'use_cases', 'crew', 'mcp_adk', 'deployment'];
         docs.sort((a, b) => {
             const idxA = order.indexOf(a);
             const idxB = order.indexOf(b);

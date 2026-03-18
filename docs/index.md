@@ -15,6 +15,9 @@ ADgents is an advanced, lightweight python framework and application platform de
 5. [Python SDK](sdk.md)
 6. [Creating Custom Skills](skills.md)
 7. [Real-World Use Cases](use_cases.md)
+8. [Multi-Agent Crews](crew.md)
+9. [Advanced: MCP Protocol & ADK](mcp_adk.md)
+10. [Deployment & PyPI Packaging](deployment.md)
 
 ---
 
