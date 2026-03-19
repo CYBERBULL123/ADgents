@@ -26,6 +26,8 @@ from core.memory import AgentMemory
 from core.agent_store import save_agent_persona, load_all_personas, delete_agent_persona
 from core.task_db import save_task, list_tasks, get_task, delete_task, task_stats
 from core.crew import Crew
+from core.crew_manager import CrewManager, get_crew_manager, AgentTemplate, CrewConfig
+from core.a2a_protocol import A2AProtocolManager, get_a2a_manager, A2AMessage
 from core.mcp_server import MCPServer
 
 # ─── Pydantic Models ──────────────────────────────────────────────────────────
@@ -70,6 +72,60 @@ class RegisterSkillRequest(BaseModel):
 
 class GenerateSkillRequest(BaseModel):
     description: str
+
+class MCPConfigRequest(BaseModel):
+    mode: Optional[str] = "stdio"
+    port: Optional[int] = 8001
+
+class ADKWrapRequest(BaseModel):
+    agent_id: str
+
+class ADKRunRequest(BaseModel):
+    agent_id: str
+    prompt: str
+
+# ─── Crew Management Models ───────────────────────────────────────────────────
+
+class CreateTemplateRequest(BaseModel):
+    name: str
+    description: str
+    role: str
+    expertise: List[str] = []
+    skills: List[str] = []
+    instructions: str = ""
+    model: str = "gemini-2.0-flash"
+
+class CreateCrewRequest(BaseModel):
+    name: str
+    description: str = ""
+    organization: str = "default"
+    members: Optional[List[Dict]] = None
+    communication_protocol: str = "a2a"
+
+class AddCrewMemberRequest(BaseModel):
+    crew_id: str
+    agent_id: str
+    agent_name: str
+    role: str = "contributor"
+
+class UpdateMemberStatusRequest(BaseModel):
+    crew_id: str
+    agent_id: str
+    status: str
+    current_task: Optional[str] = None
+
+class SendA2AMessageRequest(BaseModel):
+    crew_id: str
+    from_agent: str
+    to_agent: str
+    message_type: str
+    content: Dict[str, Any]
+
+class BroadcastA2AMessageRequest(BaseModel):
+    crew_id: str
+    from_agent: str
+    message_type: str
+    content: Dict[str, Any]
 
 # ─── App Setup ────────────────────────────────────────────────────────────────
 
@@ -184,6 +240,7 @@ async def create_agent(req: CreateAgentRequest):
 async def list_agents():
     """List all active agents."""
     return {
+        "success": True,
         "agents": [a.to_dict() for a in agents.values()],
         "count": len(agents)
     }
@@ -627,6 +684,473 @@ async def list_docs():
     return {"success": True, "docs": docs}
 
 
+# ─── MCP (Model Context Protocol) ─────────────────────────────────────────────
+
+# Global MCP server state
+_mcp_server_running = False
+_mcp_config = {"mode": "stdio", "port": 8001}
+
+@app.get("/api/mcp/status")
+async def mcp_status():
+    """Get MCP server status and available tools."""
+    try:
+        tools_count = len(SKILL_REGISTRY._skills) if SKILL_REGISTRY and hasattr(SKILL_REGISTRY, '_skills') else 0
+        agents_count = len(agents) if agents else 0
+        return {
+            "success": True,
+            "running": _mcp_server_running,
+            "server_name": "adgents",
+            "version": "1.0.0",
+            "supported_protocols": ["stdio", "sse"],
+            "available_tools": tools_count,
+            "available_agents": agents_count,
+            "config": _mcp_config,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e), "running": False}
+
+@app.get("/api/mcp/tools")
+async def mcp_list_tools():
+    """List all skills available as MCP tools."""
+    tools = []
+    for skill_name, skill in SKILL_REGISTRY._skills.items():
+        tools.append({
+            "name": skill_name,
+            "description": skill.description,
+            "input_schema": skill.parameters
+        })
+    return {"success": True, "tools": tools}
+
+@app.post("/api/mcp/configure")
+async def mcp_configure(request: MCPConfigRequest):
+    """Configure MCP server settings (e.g., stdio vs SSE mode)."""
+    global _mcp_config
+    _mcp_config = {
+        "mode": request.mode or "stdio",
+        "port": request.port or 8001,
+    }
+    return {
+        "success": True,
+        "message": "MCP configured successfully",
+        "config": _mcp_config,
+    }
+
+@app.post("/api/mcp/start")
+async def mcp_start():
+    """Start the MCP server."""
+    global _mcp_server_running
+    try:
+        _mcp_server_running = True
+        return {
+            "success": True,
+            "message": "MCP server started",
+            "running": True,
+            "config": _mcp_config,
+            "tools_count": len(SKILL_REGISTRY._skills) if SKILL_REGISTRY else 0,
+            "agents_count": len(agents) if agents else 0,
+        }
+    except Exception as e:
+        _mcp_server_running = False
+        return {"success": False, "error": str(e), "message": "Failed to start MCP server"}
+
+@app.post("/api/mcp/stop")
+async def mcp_stop():
+    """Stop the MCP server."""
+    global _mcp_server_running
+    try:
+        _mcp_server_running = False
+        return {
+            "success": True,
+            "message": "MCP server stopped",
+            "running": False,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e), "message": "Failed to stop MCP server"}
+
+
+
+# ─── ADK (Agent Development Kit) ───────────────────────────────────────────────
+
+@app.get("/api/adk/status")
+async def adk_status():
+    """Get ADK adapter status and available agents."""
+    try:
+        agents_list = []
+        for agent_id, agent in agents.items():
+            if agent.persona:
+                agents_list.append({
+                    "id": agent_id,
+                    "name": agent.persona.name,
+                    "type": "ADKAgent",
+                    "role": agent.persona.role if hasattr(agent.persona, 'role') else 'Agent'
+                })
+        
+        return {
+            "success": True,
+            "enabled": len(agents_list) > 0,
+            "total_agents": len(agents_list),
+            "agents": agents_list,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e), "enabled": False, "agents": [], "total_agents": 0}
+
+@app.post("/api/adk/wrap-agent")
+async def adk_wrap_agent(request: ADKWrapRequest):
+    """Wrap an ADgents agent in ADK-compatible interface."""
+    try:
+        from core.adk_adapter import ADKAgent
+        
+        agent_id = request.agent_id
+        agent = agents.get(agent_id)
+        
+        if not agent:
+            raise ValueError(f"Agent {agent_id} not found")
+        
+        adk_agent = ADKAgent(agent)
+        
+        return {
+            "success": True,
+            "message": f"Agent {agent_id} wrapped successfully",
+            "adk_agent": {
+                "agent_id": agent_id,
+                "adk_compatible": True,
+                "methods": ["generate_content", "run_async"],
+            }
+        }
+    except ImportError as e:
+        return {"success": False, "error": f"Import error: {str(e)}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/adk/run-agent")
+async def adk_run_agent(request: ADKRunRequest):
+    """Run an ADgents agent with ADK-compatible prompt."""
+    try:
+        from core.adk_adapter import ADKAgent
+        
+        agent_id = request.agent_id
+        prompt = request.prompt
+        
+        agent = agents.get(agent_id)
+        if not agent:
+            raise ValueError(f"Agent {agent_id} not found")
+        
+        adk_agent = ADKAgent(agent)
+        response = adk_agent.generate_content(prompt)
+        
+        return {
+            "success": True,
+            "response": {
+                "text": response.text,
+                "role": response.role,
+            }
+        }
+    except ImportError as e:
+        return {"success": False, "error": f"Import error: {str(e)}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ─── LangChain Integration ────────────────────────────────────────────────────
+
+_langchain_agents = {}  # Store LangChain adapters
+
+@app.post("/api/langchain/create-agent")
+async def langchain_create_agent(request: CreateAgentRequest):
+    """Create a LangChain-powered agent from an ADgents agent."""
+    try:
+        from core.langchain_integration import create_langchain_agent_from_adgent
+        
+        agent_id = request.name.lower().replace(" ", "_")
+        agent = agents.get(agent_id)
+        
+        if not agent:
+            raise ValueError(f"Agent {agent_id} not found")
+        
+        # Create LangChain adapter with all available skills
+        skills_list = list(SKILL_REGISTRY._skills.values()) if SKILL_REGISTRY else []
+        langchain_agent = create_langchain_agent_from_adgent(agent, skills_list=skills_list)
+        
+        _langchain_agents[agent_id] = langchain_agent
+        
+        return {
+            "success": True,
+            "message": f"LangChain agent created for {agent_id}",
+            "agent_id": agent_id,
+            "tools_registered": len(skills_list),
+            "type": "langchain_agent"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/langchain/run-agent")
+async def langchain_run_agent(request: ChatRequest):
+    """Run a LangChain agent."""
+    try:
+        agent_id = request.agent_id
+        user_input = request.message
+        
+        if agent_id not in _langchain_agents:
+            raise ValueError(f"LangChain agent {agent_id} not found. Create it first.")
+        
+        langchain_agent = _langchain_agents[agent_id]
+        result = await langchain_agent.run_agent(user_input)
+        
+        return {
+            "success": result.get("success", False),
+            "response": result.get("output"),
+            "memory": result.get("memory"),
+            "error": result.get("error")
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/langchain/agents")
+async def langchain_list_agents():
+    """List all LangChain agents."""
+    agents_list = [
+        {"agent_id": agent_id, "type": "langchain_agent"}
+        for agent_id in _langchain_agents.keys()
+    ]
+    return {
+        "success": True,
+        "agents": agents_list,
+        "total": len(agents_list)
+    }
+
+
+# ─── Google ADK Integration ──────────────────────────────────────────────────
+
+_adk_integration = None  # Global ADK Integration instance
+
+def get_adk():
+    """Initialize or get ADK Integration instance."""
+    global _adk_integration
+    if not _adk_integration:
+        try:
+            from core.google_adk_integration import ADKIntegration
+            _adk_integration = ADKIntegration()
+        except Exception as e:
+            logger.warning(f"Google ADK not available: {e}")
+    return _adk_integration
+
+@app.get("/api/google-adk/status")
+async def google_adk_status():
+    """Get Google ADK integration status and available agents."""
+    adk = get_adk()
+    if not adk:
+        return {
+            "success": False,
+            "available": False,
+            "google_adk_installed": False,
+            "message": "Google ADK not initialized. Install with: pip install google-adk"
+        }
+    
+    return {
+        "success": True,
+        "available": adk.adk_available,
+        "google_adk_installed": adk.adk_available,
+        "agents": adk.list_agents() if adk.adk_available else [],
+        "deployment_config": adk.get_deployment_config() if adk.adk_available else {},
+        "message": "Running with real Google ADK" if adk.adk_available else "Running in degraded mode - install google-adk for full functionality"
+    }
+
+@app.post("/api/google-adk/create-agent")
+async def google_adk_create_agent(request: CreateAgentRequest):
+    """Create an LLM Agent using Google ADK."""
+    try:
+        adk = get_adk()
+        if not adk:
+            return {
+                "success": False,
+                "error": "Google ADK not initialized",
+                "hint": "Install python package: pip install google-adk"
+            }
+        
+        if not adk.adk_available:
+            return {
+                "success": False,
+                "error": "Google ADK library not available - agent created in degraded mode",
+                "hint": "Install python package: pip install google-adk",
+                "status": "degraded"
+            }
+        
+        agent_id = request.name.lower().replace(" ", "_")
+        
+        # Create ADK agent
+        agent = adk.create_llm_agent(
+            name=agent_id,
+            description=request.name,
+            model="gemini-2.0-flash"
+        )
+        
+        agent_info = agent.get_agent_info()
+        
+        return {
+            "success": agent_info.get("status") == "initialized",
+            "agent_id": agent_id,
+            "agent_info": agent_info,
+            "message": f"ADK agent {'created successfully' if agent_info.get('status') == 'initialized' else 'created in degraded mode'}: {agent_id}"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "hint": "Ensure GOOGLE_API_KEY is set and google-adk is installed"
+        }
+
+@app.post("/api/google-adk/create-sequential-workflow")
+async def google_adk_create_sequential(request: Dict):
+    """Create a Sequential Workflow Agent."""
+    try:
+        adk = get_adk()
+        if not adk:
+            raise ValueError("Google ADK not initialized")
+        
+        name = request.get("name", "sequential_workflow")
+        agents_sequence = request.get("agents", [])
+        
+        workflow = adk.create_sequential_workflow(name, agents_sequence)
+        
+        return {
+            "success": True,
+            "workflow": workflow,
+            "message": "Sequential workflow created"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/google-adk/create-parallel-workflow")
+async def google_adk_create_parallel(request: Dict):
+    """Create a Parallel Workflow Agent."""
+    try:
+        adk = get_adk()
+        if not adk:
+            raise ValueError("Google ADK not initialized")
+        
+        name = request.get("name", "parallel_workflow")
+        agents_list = request.get("agents", [])
+        
+        workflow = adk.create_parallel_workflow(name, agents_list)
+        
+        return {
+            "success": True,
+            "workflow": workflow,
+            "message": "Parallel workflow created"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/google-adk/create-multi-agent-system")
+async def google_adk_create_multi_agent(request: Dict):
+    """Create a Multi-Agent System with ADK."""
+    try:
+        adk = get_adk()
+        if not adk:
+            raise ValueError("Google ADK not initialized")
+        
+        name = request.get("name", "multi_agent_system")
+        agent_names = request.get("agents", [])
+        
+        # Get agents from ADK
+        agents_dict = {
+            agent_name: adk.get_agent(agent_name) 
+            for agent_name in agent_names
+            if adk.get_agent(agent_name)
+        }
+        
+        if not agents_dict:
+            raise ValueError("No valid agents provided for multi-agent system")
+        
+        system = adk.create_multi_agent_system(name, agents_dict)
+        
+        return {
+            "success": True,
+            "system": system,
+            "message": "Multi-agent system created"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/google-adk/agents")
+async def google_adk_list_agents():
+    """List all ADK agents."""
+    try:
+        adk = get_adk()
+        if not adk:
+            return {"success": False, "agents": [], "message": "Google ADK not available"}
+        
+        agents_list = adk.list_agents()
+        return {
+            "success": True,
+            "agents": agents_list,
+            "total": len(agents_list)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/google-adk/run-agent")
+async def google_adk_run_agent(request: ChatRequest):
+    """Run an ADK agent."""
+    try:
+        adk = get_adk()
+        if not adk:
+            raise ValueError("Google ADK not initialized")
+        
+        result = await adk.run_agent(request.agent_id, request.message)
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/google-adk/register-tool")
+async def google_adk_register_tool(request: Dict):
+    """Register a skill as a tool with an ADK agent."""
+    try:
+        adk = get_adk()
+        if not adk:
+            raise ValueError("Google ADK not initialized")
+        
+        agent_name = request.get("agent_name")
+        skill_name = request.get("skill_name")
+        
+        if not agent_name or not skill_name:
+            raise ValueError("agent_name and skill_name required")
+        
+        skill = SKILL_REGISTRY.get(skill_name)
+        if not skill:
+            raise ValueError(f"Skill {skill_name} not found")
+        
+        # Convert skill to tool
+        tool = adk.convert_adgent_skill_to_tool(skill)
+        
+        # Register with agent
+        success = adk.register_tool(agent_name, tool, skill.description)
+        
+        return {
+            "success": success,
+            "message": f"Tool {skill_name} registered with agent {agent_name}" if success else "Failed to register tool"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/google-adk/deployment-config")
+async def google_adk_deployment_config():
+    """Get deployment configuration for Vertex AI."""
+    try:
+        adk = get_adk()
+        if not adk:
+            return {"success": False, "message": "Google ADK not initialized"}
+        
+        config = adk.get_deployment_config()
+        return {
+            "success": True,
+            "deployment_config": config
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+
 # ─── WebSocket ────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/{agent_id}")
@@ -684,6 +1208,351 @@ async def run_crew(req: CrewRunRequest):
     try:
         run_obj = await loop.run_in_executor(executor, crew.run, req.task)
         return {"success": True, "run": run_obj.to_dict()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ─── Agent Templates ──────────────────────────────────────────────────────────
+
+@app.post("/api/templates/create")
+async def create_template(req: CreateTemplateRequest):
+    """Create an agent template."""
+    try:
+        crew_mgr = get_crew_manager()
+        template = crew_mgr.create_template(
+            name=req.name,
+            description=req.description,
+            role=req.role,
+            expertise=req.expertise,
+            skills=req.skills,
+            instructions=req.instructions,
+            model=req.model
+        )
+        return {
+            "success": True,
+            "template": template.to_dict(),
+            "message": f"Template created: {req.name}"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/templates")
+async def list_templates():
+    """List all agent templates."""
+    try:
+        crew_mgr = get_crew_manager()
+        templates = crew_mgr.get_templates()
+        return {
+            "success": True,
+            "templates": [t.to_dict() for t in templates],
+            "count": len(templates)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/templates/{template_id}")
+async def get_template(template_id: str):
+    """Get a specific template."""
+    try:
+        crew_mgr = get_crew_manager()
+        template = crew_mgr.get_template(template_id)
+        if not template:
+            raise HTTPException(404, "Template not found")
+        return {
+            "success": True,
+            "template": template.to_dict()
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.delete("/api/templates/{template_id}")
+async def delete_template(template_id: str):
+    """Delete a template."""
+    try:
+        crew_mgr = get_crew_manager()
+        if crew_mgr.delete_template(template_id):
+            return {"success": True, "message": "Template deleted"}
+        return {"success": False, "error": "Template not found"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ─── Crew Management ──────────────────────────────────────────────────────────
+
+@app.post("/api/crews/create")
+async def create_crew(req: CreateCrewRequest):
+    """Create a new crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        crew = crew_mgr.create_crew(
+            name=req.name,
+            description=req.description,
+            organization=req.organization,
+            members=req.members,
+            communication_protocol=req.communication_protocol
+        )
+        return {
+            "success": True,
+            "crew": crew.to_dict(),
+            "message": f"Crew created: {req.name}"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/crews")
+async def list_crews(organization: Optional[str] = None):
+    """List all crews (optionally filtered by organization)."""
+    try:
+        crew_mgr = get_crew_manager()
+        if organization:
+            crews = crew_mgr.get_crews_by_organization(organization)
+        else:
+            crews = crew_mgr.list_crews()
+        
+        return {
+            "success": True,
+            "crews": [c.to_dict() for c in crews],
+            "count": len(crews)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/crews/{crew_id}")
+async def get_crew(crew_id: str):
+    """Get a specific crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        crew = crew_mgr.get_crew(crew_id)
+        if not crew:
+            raise HTTPException(404, "Crew not found")
+        return {
+            "success": True,
+            "crew": crew.to_dict()
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/crews/{crew_id}/add-member")
+async def add_crew_member(crew_id: str, req: AddCrewMemberRequest):
+    """Add an agent to a crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        success = crew_mgr.add_member_to_crew(
+            crew_id=crew_id,
+            agent_id=req.agent_id,
+            agent_name=req.agent_name,
+            role=req.role
+        )
+        if success:
+            crew = crew_mgr.get_crew(crew_id)
+            return {
+                "success": True,
+                "crew": crew.to_dict(),
+                "message": f"Added {req.agent_name} to crew"
+            }
+        return {"success": False, "error": "Failed to add member"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/crews/{crew_id}/remove-member")
+async def remove_crew_member(crew_id: str, agent_id: str):
+    """Remove an agent from a crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        success = crew_mgr.remove_member_from_crew(crew_id, agent_id)
+        if success:
+            crew = crew_mgr.get_crew(crew_id)
+            return {
+                "success": True,
+                "crew": crew.to_dict(),
+                "message": "Member removed from crew"
+            }
+        return {"success": False, "error": "Member not found"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/crews/{crew_id}/update-member-status")
+async def update_member_status(crew_id: str, req: UpdateMemberStatusRequest):
+    """Update a crew member's status in real-time."""
+    try:
+        crew_mgr = get_crew_manager()
+        success = crew_mgr.update_member_status(
+            crew_id=crew_id,
+            agent_id=req.agent_id,
+            status=req.status,
+            current_task=req.current_task
+        )
+        if success:
+            return {
+                "success": True,
+                "message": f"Member status updated to: {req.status}"
+            }
+        return {"success": False, "error": "Member not found"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.delete("/api/crews/{crew_id}")
+async def delete_crew(crew_id: str):
+    """Delete a crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        if crew_mgr.delete_crew(crew_id):
+            return {"success": True, "message": "Crew deleted"}
+        return {"success": False, "error": "Crew not found"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ─── Organizations ────────────────────────────────────────────────────────────
+
+@app.post("/api/organizations/create")
+async def create_organization(name: str, description: str = ""):
+    """Create a new organization."""
+    try:
+        crew_mgr = get_crew_manager()
+        org = crew_mgr.create_organization(name, description)
+        return {
+            "success": True,
+            "organization": org,
+            "message": f"Organization created: {name}"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/organizations")
+async def list_organizations():
+    """List all organizations."""
+    try:
+        crew_mgr = get_crew_manager()
+        orgs = crew_mgr.list_organizations()
+        return {
+            "success": True,
+            "organizations": orgs,
+            "count": len(orgs)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/organizations/{org_id}")
+async def get_organization(org_id: str):
+    """Get organization details and statistics."""
+    try:
+        crew_mgr = get_crew_manager()
+        org = crew_mgr.get_organization(org_id)
+        if not org:
+            raise HTTPException(404, "Organization not found")
+        
+        stats = crew_mgr.get_organization_stats(org_id)
+        
+        return {
+            "success": True,
+            "organization": org,
+            "statistics": stats
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ─── Agent-to-Agent (A2A) Protocol ────────────────────────────────────────────
+
+@app.post("/api/a2a/send")
+async def send_a2a_message(req: SendA2AMessageRequest):
+    """Send a message between two agents via A2A protocol."""
+    try:
+        crew_mgr = get_crew_manager()
+        a2a_mgr = get_a2a_manager()
+        
+        # Verify crew and agents exist
+        crew = crew_mgr.get_crew(req.crew_id)
+        if not crew:
+            return {"success": False, "error": "Crew not found"}
+        
+        agent_ids = {m.agent_id for m in crew.members}
+        if req.from_agent not in agent_ids or req.to_agent not in agent_ids:
+            return {"success": False, "error": "Agent not in crew"}
+        
+        # Create A2A message
+        message = A2AMessage(
+            sender_id=req.from_agent,
+            receiver_id=req.to_agent,
+            crew_id=req.crew_id,
+            message_type=req.message_type,
+            content=req.content
+        )
+        
+        # Send via A2A protocol
+        result = await crew_mgr.send_message_between_agents(
+            crew_id=req.crew_id,
+            from_agent=req.from_agent,
+            to_agent=req.to_agent,
+            message=req.content
+        )
+        
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/a2a/broadcast")
+async def broadcast_a2a_message(req: BroadcastA2AMessageRequest):
+    """Broadcast a message to all agents in a crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        
+        # Verify crew exists
+        crew = crew_mgr.get_crew(req.crew_id)
+        if not crew:
+            return {"success": False, "error": "Crew not found"}
+        
+        # Broadcast message
+        result = await crew_mgr.broadcast_to_crew(
+            crew_id=req.crew_id,
+            from_agent=req.from_agent,
+            message=req.content
+        )
+        
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/a2a/communications/{crew_id}")
+async def get_crew_communications(crew_id: str):
+    """Get all communications in a crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        comms = crew_mgr.get_crew_communications(crew_id)
+        return {
+            "success": True,
+            "communications": comms,
+            "count": len(comms)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/a2a/communications/agent/{agent_id}")
+async def get_agent_communications(agent_id: str):
+    """Get all communications for a specific agent."""
+    try:
+        crew_mgr = get_crew_manager()
+        comms = crew_mgr.get_agent_communications(agent_id)
+        return {
+            "success": True,
+            "communications": comms,
+            "count": len(comms)
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 

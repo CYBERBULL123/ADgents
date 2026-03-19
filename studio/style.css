@@ -309,6 +309,27 @@ body {
   overflow-y: auto;
 }
 
+/* ─── Page Headers ────────────────────────────────────────────────────── */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-bottom: 2rem;
+  flex-wrap: wrap;
+}
+
+.page-header > div:first-child {
+  flex: 1;
+  min-width: 200px;
+}
+
+.page-header .btn {
+  align-self: flex-start;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* ─── Pages ───────────────────────────────────────────────────────────── */
 .page {
   display: none;
@@ -2096,6 +2117,16 @@ textarea {
   .stats-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+
+  .page-header {
+    flex-direction: row;
+    gap: 1.5rem;
+    align-items: center;
+  }
+
+  .page-header .btn {
+    min-width: 140px;
+  }
 }
 
 @media (max-width: 600px) {
@@ -2138,6 +2169,21 @@ textarea {
 
   .task-feed-card {
     min-height: 300px;
+  }
+
+  .page-header {
+    flex-direction: column;
+    gap: 1rem;
+    align-items: stretch;
+  }
+
+  .page-header > div:first-child {
+    width: 100%;
+  }
+
+  .page-header .btn {
+    width: 100%;
+    align-self: stretch;
   }
 }
 
@@ -2927,5 +2973,287 @@ textarea {
   }
   .docs-content-area {
     padding: 1.5rem;
+  }
+}
+
+/* ─── ADK Integration Styles ──────────────────────────────────────────── */
+#page-adk .card {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.05) 0%, rgba(14, 165, 233, 0.05) 100%);
+  border: 1px solid rgba(37, 99, 235, 0.15);
+  transition: all 0.3s ease;
+}
+
+#page-adk .card:hover {
+  border-color: rgba(37, 99, 235, 0.3);
+  box-shadow: 0 8px 32px rgba(37, 99, 235, 0.1);
+  transform: translateY(-2px);
+}
+
+#page-adk .card-header {
+  border-bottom: 1px solid rgba(37, 99, 235, 0.1);
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+#page-adk .form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+}
+
+#page-adk .form-group {
+  margin-bottom: 0;
+}
+
+#page-adk input[type=text],
+#page-adk textarea,
+#page-adk select {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1.5px solid rgba(37, 99, 235, 0.2);
+  border-radius: var(--radius-xs);
+  padding: 0.8rem 1rem;
+  color: var(--text-primary);
+  transition: all 0.3s ease;
+}
+
+#page-adk input:focus,
+#page-adk textarea:focus,
+#page-adk select:focus {
+  border-color: rgba(37, 99, 235, 0.6);
+  background: rgba(37, 99, 235, 0.05);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+#page-adk #adk-test-result {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(37, 99, 235, 0.1);
+}
+
+#page-adk .btn {
+  margin-top: 1rem;
+}
+
+#adk-agents-list > div {
+  padding: 1rem;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.02);
+  transition: all 0.2s ease;
+}
+
+#adk-agents-list > div:hover {
+  background: rgba(37, 99, 235, 0.08);
+  border-color: rgba(37, 99, 235, 0.4);
+  transform: translateX(4px);
+}
+
+@media (max-width: 900px) {
+  #page-adk .two-col {
+    gap: 1.25rem;
+  }
+}
+
+@media (max-width: 600px) {
+  #page-adk .card {
+    padding: 1.25rem;
+  }
+
+  #page-adk .form-grid {
+    gap: 1rem;
+  }
+
+  #page-adk .form-group label {
+    font-size: 0.8rem;
+  }
+
+  #page-adk input[type=text],
+  #page-adk textarea,
+  #page-adk select {
+    padding: 0.7rem 0.9rem;
+    font-size: 16px;
+  }
+
+  #adk-test-result {
+    margin-top: 1.5rem;
+  }
+}
+
+/* ─── MCP Server Styles ───────────────────────────────────────────────── */
+#page-mcp .card {
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.05) 0%, rgba(37, 99, 235, 0.05) 100%);
+  border: 1px solid rgba(124, 58, 237, 0.15);
+  transition: all 0.3s ease;
+}
+
+#page-mcp .card:hover {
+  border-color: rgba(124, 58, 237, 0.3);
+  box-shadow: 0 8px 32px rgba(124, 58, 237, 0.1);
+  transform: translateY(-2px);
+}
+
+#page-mcp .card-header {
+  border-bottom: 1px solid rgba(124, 58, 237, 0.1);
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+}
+
+#page-mcp .card-header h3 {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+
+/* MCP Tool Cards */
+#mcp-tools-list > div {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(124, 58, 237, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 1.25rem;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+#mcp-tools-list > div::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(124, 58, 237, 0.5), transparent);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+#mcp-tools-list > div:hover {
+  background: rgba(124, 58, 237, 0.08);
+  border-color: rgba(124, 58, 237, 0.4);
+  box-shadow: 0 4px 16px rgba(124, 58, 237, 0.1);
+  transform: translateX(4px);
+}
+
+#mcp-tools-list > div:hover::before {
+  opacity: 1;
+}
+
+#mcp-tools-list > div > div:first-child {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--accent);
+  margin-bottom: 0.75rem;
+  letter-spacing: -0.3px;
+}
+
+#mcp-tools-list > div > div:nth-child(2) {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+
+#mcp-tools-list > div > div:nth-child(3) {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 0.6rem;
+  border-radius: var(--radius-xs);
+  border-left: 2px solid rgba(124, 58, 237, 0.3);
+}
+
+/* MCP Status Display */
+#mcp-status {
+  padding: 1.5rem;
+  background: rgba(255, 255, 255, 0.01);
+  border-radius: var(--radius-xs);
+  font-size: 0.9rem;
+  line-height: 1.8;
+}
+
+#mcp-status div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid rgba(124, 58, 237, 0.08);
+}
+
+#mcp-status div:last-child {
+  border-bottom: none;
+}
+
+#mcp-status strong {
+  color: var(--text-primary);
+  font-weight: 600;
+  min-width: 150px;
+}
+
+/* Badge Status */
+.badge {
+  display: inline-block;
+  padding: 0.3rem 0.8rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.badge-green {
+  background: rgba(16, 185, 129, 0.2);
+  color: var(--green);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.badge-red {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* MCP Form Improvements */
+#page-mcp .form-group {
+  margin-bottom: 1.25rem;
+}
+
+#page-mcp input[type=number],
+#page-mcp select {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1.5px solid rgba(124, 58, 237, 0.2);
+  border-radius: var(--radius-xs);
+  padding: 0.75rem 1rem;
+  color: var(--text-primary);
+  transition: all 0.3s ease;
+}
+
+#page-mcp input[type=number]:focus,
+#page-mcp select:focus {
+  border-color: rgba(124, 58, 237, 0.6);
+  background: rgba(124, 58, 237, 0.05);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.15);
+}
+
+#page-mcp .form-group label {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+/* Empty State */
+.empty-state-small {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+@media (max-width: 900px) {
+  #page-mcp .two-col {
+    grid-template-columns: 1fr;
+  }
+  
+  #mcp-tools-list {
+    grid-template-columns: 1fr;
   }
 }

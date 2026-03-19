@@ -75,6 +75,18 @@
             <span class="nav-icon">🛠️</span>
             <span>Skills</span>
         </a>
+        <a class="nav-item" data-page="mcp" onclick="navigate('mcp');closeSidebar()">
+            <span class="nav-icon">🔗</span>
+            <span>MCP Server</span>
+        </a>
+        <a class="nav-item" data-page="crews" onclick="navigate('crews');closeSidebar()">
+            <span class="nav-icon">🤝</span>
+            <span>Crew Manager</span>
+        </a>
+        <a class="nav-item" data-page="adk" onclick="navigate('adk');closeSidebar()">
+            <span class="nav-icon">🧩</span>
+            <span>ADK Integration</span>
+        </a>
 
         <div class="sidebar-section-label">Settings</div>
         <a class="nav-item" data-page="settings" onclick="navigate('settings');closeSidebar()">
@@ -653,6 +665,120 @@
                 <div class="skills-section-label">Available Skills (<span id="skills-count">0</span>)</div>
                 <div class="skills-grid-full" id="skills-grid-full"></div>
 
+            </section>
+
+            <!-- ── MCP SERVER ── -->
+            <section class="page" id="page-mcp">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">🔗 MCP Server</div>
+                        <div class="breadcrumb">Model Context Protocol Integration</div>
+                    </div>
+                    <button class="btn btn-primary" onclick="toggleMCPServer()">
+                        <span id="mcp-toggle-text">Start Server</span>
+                    </button>
+                </div>
+
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>📊 Server Status</h3>
+                        </div>
+                        <div id="mcp-status">
+                            <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                                Loading...
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>⚙️ Configuration</h3>
+                        </div>
+                        <div class="form-group">
+                            <label for="mcp-mode">Protocol Mode</label>
+                            <select id="mcp-mode">
+                                <option value="stdio">stdio (Claude Desktop)</option>
+                                <option value="sse">SSE (Web Clients)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="mcp-port">Server Port</label>
+                            <input type="number" id="mcp-port" value="8001" min="1024" max="65535" />
+                        </div>
+                        <button class="btn btn-primary" onclick="saveMCPConfig()" style="width: 100%; margin-top: 0.5rem;">💾 Save Configuration</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🔨 Available Tools (<span id="mcp-tools-count">0</span>)</h3>
+                    </div>
+                    <div id="mcp-tools-list" style="display: grid; gap: 1rem;">
+                        <!-- Tools will be injected here -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── CREW MANAGER ── -->
+            <section class="page" id="page-crews">
+                <iframe src="crews.html" style="width: 100%; height: 100vh; border: none; border-radius: 12px;"></iframe>
+            </section>
+
+            <!-- ── ADK INTEGRATION ── -->
+            <section class="page" id="page-adk">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">🧩 ADK Integration</div>
+                        <div class="breadcrumb">Agent Development Kit Adapter</div>
+                    </div>
+                </div>
+
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>📊 ADK Status</h3>
+                        </div>
+                        <div id="adk-status" style="line-height: 1.8;">
+                            <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                                Loading...
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>📋 Available Agents</h3>
+                        </div>
+                        <div id="adk-agents-list" style="display: flex; flex-direction: column; gap: 0.75rem;">
+                            <!-- Agents will be injected here -->
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>▶️ Test ADK Agent</h3>
+                    </div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Select Agent</label>
+                            <select id="adk-test-agent">
+                                <option value="">Choose an agent...</option>
+                            </select>
+                        </div>
+                        <div class="form-group full-width">
+                            <label>Prompt</label>
+                            <textarea id="adk-test-prompt" placeholder="Enter a prompt to test..." style="min-height: 120px;"></textarea>
+                        </div>
+                        <button class="btn btn-primary" onclick="runADKTest()">▶️ Run Test</button>
+                    </div>
+                    <div id="adk-test-result" style="margin-top: 1.5rem; display: none;">
+                        <div class="card" style="background: rgba(0, 0, 0, 0.2);">
+                            <div style="font-family: 'JetBrains Mono'; white-space: pre-wrap; word-wrap: break-word;" id="adk-test-output"></div>
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <!-- ── SETTINGS ── -->

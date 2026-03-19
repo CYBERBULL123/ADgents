@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crew Manager - ADgents</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="main-content">
+        <header class="topbar" style="border-bottom: none;">
+            <div class="topbar-left">
+                <div class="page-title">🤝 Crew Manager</div>
+                <div class="breadcrumb">Team-based agent organization and real-time coordination</div>
+            </div>
+        </header>
+
+        <div class="page-container">
+            <section class="page active" id="page-crews">
+                <!-- Tabs -->
+                <div style="display: flex; gap: 2.5rem; margin-bottom: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0;">
+                    <button class="tab-btn active" data-tab="crews" onclick="switchTab('crews');" style="border: none; background: none; color: var(--text-secondary); cursor: pointer; padding: 1rem 0; font-size: 0.95rem; transition: all 0.3s; border-bottom: 3px solid transparent; font-weight: 500;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="if(!this.classList.contains('active')) this.style.color='var(--text-secondary)'">Active Crews</button>
+                    <button class="tab-btn" data-tab="templates" onclick="switchTab('templates');" style="border: none; background: none; color: var(--text-secondary); cursor: pointer; padding: 1rem 0; font-size: 0.95rem; transition: all 0.3s; border-bottom: 3px solid transparent; font-weight: 500;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="if(!this.classList.contains('active')) this.style.color='var(--text-secondary)'">Agent Templates</button>
+                    <button class="tab-btn" data-tab="organizations" onclick="switchTab('organizations');" style="border: none; background: none; color: var(--text-secondary); cursor: pointer; padding: 1rem 0; font-size: 0.95rem; transition: all 0.3s; border-bottom: 3px solid transparent; font-weight: 500;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="if(!this.classList.contains('active')) this.style.color='var(--text-secondary)'">Organizations</button>
+                    <button class="tab-btn" data-tab="communications" onclick="switchTab('communications');" style="border: none; background: none; color: var(--text-secondary); cursor: pointer; padding: 1rem 0; font-size: 0.95rem; transition: all 0.3s; border-bottom: 3px solid transparent; font-weight: 500;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="if(!this.classList.contains('active')) this.style.color='var(--text-secondary)'">A2A Communications</button>
+                </div>
+
+                <!-- Tab Content: Crews -->
+                <div id="tab-crews" class="tab-content active" style="display: block;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+                        <h2 style="margin: 0; font-size: 1.3rem;">Active Crews</h2>
+                        <button class="btn btn-primary" onclick="showCreateCrewModal()">+ Create Crew</button>
+                    </div>
+                    <div id="crews-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 1.5rem;">
+                        <p style="color: var(--text-secondary);">Loading crews...</p>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Templates -->
+                <div id="tab-templates" class="tab-content" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+                        <h2 style="margin: 0; font-size: 1.3rem;">Agent Templates</h2>
+                        <button class="btn btn-primary" onclick="showCreateTemplateModal()">+ Create Template</button>
+                    </div>
+                    <div id="templates-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 1.5rem;">
+                        <p style="color: var(--text-secondary);">Loading templates...</p>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Organizations -->
+                <div id="tab-organizations" class="tab-content" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+                        <h2 style="margin: 0; font-size: 1.3rem;">Organizations</h2>
+                        <button class="btn btn-primary" onclick="showCreateOrgModal()">+ Create Organization</button>
+                    </div>
+                    <div id="organizations-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 1.5rem;">
+                        <p style="color: var(--text-secondary);">Loading organizations...</p>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Communications -->
+                <div id="tab-communications" class="tab-content" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+                        <h2 style="margin: 0; font-size: 1.3rem;">A2A Communications</h2>
+                        <div>
+                            <label for="comm-crew-select" style="margin-right: 1rem; color: var(--text-secondary);">Crew:</label>
+                            <select id="comm-crew-select" class="form-control" onchange="loadCrewCommunications()" style="width: 240px; display: inline-block;">
+                                <option value="">-- Select a crew --</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="communications-list" style="display: flex; flex-direction: column; gap: 1rem;">
+                        <div class="card">
+                            <p style="color: var(--text-secondary); text-align: center; padding: 2rem;">Select a crew to view agent communications</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Create Crew Modal -->
+    <div id="createCrewModal" class="modal-overlay" style="display: none;" onclick="if(event.target === this) closeModal('createCrewModal')">
+        <div class="modal" style="max-width: 650px;">
+            <div class="modal-header">
+                <div class="modal-title">🤝 Create New Crew</div>
+                <button class="modal-close" onclick="closeModal('createCrewModal')">✕</button>
+            </div>
+            <div class="modal-body">
+                <form onsubmit="createCrew(event)">
+                    <div class="form-grid">
+                        <div class="form-group full-width">
+                            <label>Crew Name *</label>
+                            <input type="text" id="crew-name" required />
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label>Description</label>
+                            <textarea id="crew-desc" rows="3"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Organization</label>
+                            <select id="crew-org" class="form-control">
+                                <option value="default">Default</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Communication Protocol</label>
+                            <select id="crew-protocol" class="form-control">
+                                <option value="a2a">A2A (Agent-to-Agent)</option>
+                                <option value="adk">Google ADK</option>
+                                <option value="rest">REST</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label>Select Agents:</label>
+                            <div id="agent-selector" style="background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; max-height: 280px; overflow-y: auto;">
+                                <p style="color: var(--text-secondary); margin: 0;">Loading agents...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 1rem; margin-top: 2rem; justify-content: flex-end;">
+                        <button type="button" class="btn btn-ghost" onclick="closeModal('createCrewModal')">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Create Crew</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Template Modal -->
+    <div id="createTemplateModal" class="modal-overlay" style="display: none;" onclick="if(event.target === this) closeModal('createTemplateModal')">
+        <div class="modal" style="max-width: 650px;">
+            <div class="modal-header">
+                <div class="modal-title">✨ Create Agent Template</div>
+                <button class="modal-close" onclick="closeModal('createTemplateModal')">✕</button>
+            </div>
+            <div class="modal-body">
+                <form onsubmit="createTemplate(event)">
+                    <div class="form-grid">
+                        <div class="form-group full-width">
+                            <label>Template Name *</label>
+                            <input type="text" id="template-name" required />
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label>Description</label>
+                            <textarea id="template-desc" rows="2"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Role *</label>
+                            <input type="text" id="template-role" placeholder="e.g., Researcher" required />
+                        </div>
+
+                        <div class="form-group">
+                            <label>Model</label>
+                            <select id="template-model" class="form-control">
+                                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                                <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                                <option value="claude-3-opus">Claude 3 Opus</option>
+                                <option value="gpt-4">GPT-4</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label>Expertise (comma-separated)</label>
+                            <input type="text" id="template-expertise" placeholder="e.g., Python, ML, Data Analysis" />
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label>Skills (comma-separated)</label>
+                            <input type="text" id="template-skills" placeholder="e.g., Python, SQL" />
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label>System Instructions</label>
+                            <textarea id="template-instructions" rows="3"></textarea>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 1rem; margin-top: 2rem; justify-content: flex-end;">
+                        <button type="button" class="btn btn-ghost" onclick="closeModal('createTemplateModal')">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Create Template</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Organization Modal -->
+    <div id="createOrgModal" class="modal-overlay" style="display: none;" onclick="if(event.target === this) closeModal('createOrgModal')">
+        <div class="modal" style="max-width: 550px;">
+            <div class="modal-header">
+                <div class="modal-title">🏢 Create Organization</div>
+                <button class="modal-close" onclick="closeModal('createOrgModal')">✕</button>
+            </div>
+            <div class="modal-body">
+                <form onsubmit="createOrganization(event)">
+                    <div class="form-grid">
+                        <div class="form-group full-width">
+                            <label>Organization Name *</label>
+                            <input type="text" id="org-name" required />
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label>Description</label>
+                            <textarea id="org-desc" rows="3"></textarea>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 1rem; margin-top: 2rem; justify-content: flex-end;">
+                        <button type="button" class="btn btn-ghost" onclick="closeModal('createOrgModal')">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Create</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+        
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(tab => tab.style.display = 'none');
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(`tab-${tabName}`).style.display = 'block';
+            document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+            document.querySelector(`[data-tab="${tabName}"]`).style.borderBottomColor = 'var(--accent)';
+            document.querySelector(`[data-tab="${tabName}"]`).style.color = 'var(--accent)';
+
+            if (tabName === 'crews') loadCrews();
+            else if (tabName === 'templates') loadTemplates();
+            else if (tabName === 'organizations') loadOrganizations();
+            else if (tabName === 'communications') loadCrewsForComm();
+        }
+
+        async function loadCrews() {
+            try {
+                const res = await fetch(`${API_BASE}/crews`);
+                const data = await res.json();
+                if (data.success) renderCrews(data.crews);
+            } catch (error) { console.error('Error:', error); }
+        }
+
+        function renderCrews(crews) {
+            const container = document.getElementById('crews-list');
+            if (crews.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-secondary);">No crews yet.</p>';
+                return;
+            }
+            container.innerHTML = crews.map(crew => `
+                <div class="card">
+                    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                        <h3 style="margin: 0;">${crew.name}</h3>
+                        <div style="display: flex; gap: 0.3rem;">
+                            <button class="btn btn-ghost btn-xs" onclick="editCrew('${crew.id}')" title="Edit crew">✏️</button>
+                            <button class="btn btn-danger btn-xs" onclick="deleteCrew('${crew.id}')" title="Delete crew">🗑️</button>
+                        </div>
+                    </div>
+                    <div style="padding: 1rem 0 0;">
+                        <p style="color: var(--text-secondary); font-size: 0.9rem; margin: 0 0 1rem;">${crew.description || ''}</p>
+                        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
+                            ${crew.members.map(m => `<span style="background: var(--accent-light); color: var(--accent); padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.85rem; display: inline-block;"><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${m.status === 'active' ? '#10b981' : '#6b7280'}; margin-right: 0.4rem;"></span>${m.agent_name}</span>`).join('')}
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; font-size: 0.85rem;">
+                            <span style="background: var(--bg-input); padding: 0.3rem 0.8rem; border-radius: 6px; color: var(--text-secondary);">${crew.members.length} members</span>
+                            <span style="background: var(--bg-input); padding: 0.3rem 0.8rem; border-radius: 6px; color: var(--text-secondary);">${crew.communication_protocol}</span>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function loadTemplates() {
+            try {
+                const res = await fetch(`${API_BASE}/templates`);
+                const data = await res.json();
+                if (data.success) renderTemplates(data.templates);
+            } catch (error) { console.error('Error:', error); }
+        }
+
+        function renderTemplates(templates) {
+            const container = document.getElementById('templates-list');
+            if (templates.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-secondary);">No templates.</p>';
+                return;
+            }
+            container.innerHTML = templates.map(t => `
+                <div class="card">
+                    <div class="card-header"><h3 style="margin: 0;">${t.name}</h3></div>
+                    <div style="padding: 1rem 0 0;">
+                        <p style="color: var(--text-secondary); font-size: 0.9rem; margin: 0 0 0.8rem;">${t.description || ''}</p>
+                        <div style="background: var(--bg-input); padding: 0.5rem; border-radius: 6px; font-size: 0.85rem; margin-bottom: 0.8rem; color: var(--text-secondary);">
+                            Role: <strong style="color: var(--text-primary);">${t.role}</strong>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+                            <button class="btn btn-ghost btn-xs" onclick="alert('Clone soon')">Clone</button>
+                            <button class="btn btn-danger btn-xs" onclick="deleteTemplate('${t.id}')">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function deleteTemplate(id) {
+            if (confirm('Delete?')) {
+                try {
+                    const res = await fetch(`${API_BASE}/templates/${id}`, { method: 'DELETE' });
+                    if ((await res.json()).success) loadTemplates();
+                } catch (error) { console.error('Error:', error); }
+            }
+        }
+
+        async function deleteCrew(id) {
+            if (confirm('Are you sure you want to delete this crew?')) {
+                try {
+                    const res = await fetch(`${API_BASE}/crews/${id}`, { method: 'DELETE' });
+                    const data = await res.json();
+                    if (data.success) {
+                        alert('Crew deleted successfully');
+                        loadCrews();
+                    } else {
+                        alert('Error deleting crew: ' + (data.error || 'Unknown error'));
+                    }
+                } catch (error) { 
+                    console.error('Error:', error);
+                    alert('Failed to delete crew');
+                }
+            }
+        }
+
+        function editCrew(id) {
+            alert('Edit crew feature coming soon');
+        }
+
+        async function loadOrganizations() {
+            try {
+                const res = await fetch(`${API_BASE}/organizations`);
+                const data = await res.json();
+                if (data.success) renderOrganizations(data.organizations);
+            } catch (error) { console.error('Error:', error); }
+        }
+
+        function renderOrganizations(orgs) {
+            const container = document.getElementById('organizations-list');
+            if (orgs.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-secondary);">No organizations.</p>';
+                return;
+            }
+            container.innerHTML = orgs.map(org => `
+                <div class="card" style="cursor: pointer;" onclick="showOrgDetails('${org.id}')">
+                    <div class="card-header"><h3 style="margin: 0;">${org.name}</h3></div>
+                    <div style="padding: 1rem 0 0;">
+                        <p style="color: var(--text-secondary); margin: 0 0 0.8rem;">${org.description || ''}</p>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Created: ${new Date(org.created_at).toLocaleDateString()}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function showOrgDetails(id) {
+            try {
+                const res = await fetch(`${API_BASE}/organizations/${id}`);
+                const data = await res.json();
+                if (data.success) {
+                    const s = data.statistics;
+                    alert(`${data.organization.name}\n\nTeams: ${s.crew_count}\nAgents: ${s.total_agents}\nActive: ${s.active_agents}`);
+                }
+            } catch (error) { console.error('Error:', error); }
+        }
+
+        function showCreateCrewModal() {
+            loadOrganizationsForModal();
+            loadAgentsForSelector();
+            document.getElementById('createCrewModal').style.display = 'flex';
+        }
+
+        async function loadAgentsForSelector() {
+            try {
+                const res = await fetch(`${API_BASE}/agents`);
+                const data = await res.json();
+                if (data.success && data.agents && data.agents.length > 0) {
+                    const selector = document.getElementById('agent-selector');
+                    selector.innerHTML = data.agents.map(agent => `
+                        <label style="display: flex; align-items: center; margin: 0.5rem 0; cursor: pointer; color: var(--text-primary);">
+                            <input type="checkbox" value="${agent.id}" class="agent-checkbox" style="margin-right: 0.5rem;">
+                            <strong>${agent.persona?.name || agent.name || 'Unknown'}</strong> 
+                            <span style="color: var(--text-secondary); margin-left: 0.3rem;">(${agent.persona?.role || agent.role || 'Agent'})</span>
+                        </label>
+                    `).join('');
+                } else {
+                    const selector = document.getElementById('agent-selector');
+                    selector.innerHTML = '<p style="color: var(--text-secondary); padding: 1rem; margin: 0; text-align: center;">No active agents yet. <a href="javascript:navigate(\'agents\')" style="color: var(--accent);">Create an agent first →</a></p>';
+                }
+            } catch (error) { 
+                console.error('Error loading agents:', error);
+                const selector = document.getElementById('agent-selector');
+                selector.innerHTML = '<p style="color: var(--text-secondary); padding: 1rem; margin: 0;">Failed to load agents</p>';
+            }
+        }
+
+        async function loadOrganizationsForModal() {
+            try {
+                const res = await fetch(`${API_BASE}/organizations`);
+                const data = await res.json();
+                if (data.success && data.organizations.length > 0) {
+                    const select = document.getElementById('crew-org');
+                    select.innerHTML = data.organizations.map(org => `<option value="${org.id}">${org.name}</option>`).join('');
+                }
+            } catch (error) { console.error('Error:', error); }
+        }
+
+        async function createCrew(event) {
+            event.preventDefault();
+            const members = Array.from(document.querySelectorAll('.agent-checkbox:checked')).map((el, i) => ({
+                agent_id: el.value,
+                agent_name: `Agent ${i + 1}`,
+                role: 'contributor'
+            }));
+
+            try {
+                const res = await fetch(`${API_BASE}/crews/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: document.getElementById('crew-name').value,
+                        description: document.getElementById('crew-desc').value,
+                        organization: document.getElementById('crew-org').value,
+                        members: members,
+                        communication_protocol: document.getElementById('crew-protocol').value
+                    })
+                });
+                if ((await res.json()).success) {
+                    alert('Crew created!');
+                    closeModal('createCrewModal');
+                    loadCrews();
+                }
+            } catch (error) { console.error('Error:', error); }
+        }
+
+        function showCreateTemplateModal() {
+            document.getElementById('createTemplateModal').style.display = 'flex';
+        }
+
+        async function createTemplate(event) {
+            event.preventDefault();
+            try {
+                const res = await fetch(`${API_BASE}/templates/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: document.getElementById('template-name').value,
+                        description: document.getElementById('template-desc').value,
+                        role: document.getElementById('template-role').value,
+                        expertise: document.getElementById('template-expertise').value.split(',').map(s => s.trim()).filter(Boolean),
+                        skills: document.getElementById('template-skills').value.split(',').map(s => s.trim()).filter(Boolean),
+                        instructions: document.getElementById('template-instructions').value,
+                        model: document.getElementById('template-model').value
+                    })
+                });
+                if ((await res.json()).success) {
+                    alert('Template created!');
+                    closeModal('createTemplateModal');
+                    loadTemplates();
+                }
+            } catch (error) { console.error('Error:', error); }
+        }
+
+        function showCreateOrgModal() {
+            document.getElementById('createOrgModal').style.display = 'flex';
+        }
+
+        async function createOrganization(event) {
+            event.preventDefault();
+            try {
+                const res = await fetch(`${API_BASE}/organizations/create?name=${encodeURIComponent(document.getElementById('org-name').value)}&description=${encodeURIComponent(document.getElementById('org-desc').value)}`);
+                if ((await res.json()).success) {
+                    alert('Organization created!');
+                    closeModal('createOrgModal');
+                    loadOrganizations();
+                }
+            } catch (error) { console.error('Error:', error); }
+        }
+
+        async function loadCrewsForComm() {
+            try {
+                const res = await fetch(`${API_BASE}/crews`);
+                const data = await res.json();
+                if (data.success) {
+                    const select = document.getElementById('comm-crew-select');
+                    select.innerHTML = '<option value="">-- Select a crew --</option>' + data.crews.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+                }
+            } catch (error) { console.error('Error:', error); }
+        }
+
+        async function loadCrewCommunications() {
+            const id = document.getElementById('comm-crew-select').value;
+            if (!id) return;
+            try {
+                const res = await fetch(`${API_BASE}/a2a/communications/${id}`);
+                const data = await res.json();
+                if (data.success && data.communications.length > 0) {
+                    const container = document.getElementById('communications-list');
+                    container.innerHTML = data.communications.map(comm => `
+                        <div class="card" style="border-left: 3px solid var(--accent);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
+                                <div><strong style="color: var(--accent);">${comm.from}</strong><span style="color: var(--text-muted);"> → </span><strong style="color: var(--accent);">${comm.to}</strong></div>
+                                <small style="color: var(--text-muted);">${new Date(comm.timestamp).toLocaleTimeString()}</small>
+                            </div>
+                            <div style="background: var(--bg-input); padding: 0.75rem; border-radius: 6px; font-size: 0.85rem; font-family: var(--font-mono); color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow-y: auto;">${JSON.stringify(comm.message?.content || comm.content, null, 2)}</div>
+                        </div>
+                    `).join('');
+                } else {
+                    document.getElementById('communications-list').innerHTML = '<div class="card"><p style="color: var(--text-secondary); text-align: center; padding: 2rem;">No communications.</p></div>';
+                }
+            } catch (error) { console.error('Error:', error); }
+        }
+
+        function closeModal(id) {
+            document.getElementById(id).style.display = 'none';
+        }
+
+        loadCrews();
+    </script>
+</body>
+</html>
