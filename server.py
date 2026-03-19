@@ -659,8 +659,24 @@ async def configure_llm(config: Dict[str, Any]):
 
 @app.get("/api/docs/{doc_name}")
 async def get_doc(doc_name: str):
-    """Serve markdown documentation."""
-    docs_path = Path(__file__).parent / "docs" / f"{doc_name}.md"
+    """Serve markdown documentation from packages or project folders."""
+    docs_base = Path(__file__).parent / "docs"
+    
+    # Check if doc has section prefix (e.g., 'packages-installation')
+    if '-' in doc_name:
+        section, name = doc_name.split('-', 1)
+        docs_path = docs_base / section / f"{name}.md"
+    else:
+        # Try packages first, then project, then root
+        for location in [docs_base / "packages" / f"{doc_name}.md", 
+                         docs_base / "project" / f"{doc_name}.md",
+                         docs_base / f"{doc_name}.md"]:
+            if location.exists() and location.is_file():
+                docs_path = location
+                break
+        else:
+            raise HTTPException(404, "Doc not found")
+    
     if docs_path.exists() and docs_path.is_file():
         with open(docs_path, "r", encoding="utf-8") as f:
             return {"success": True, "content": f.read()}
@@ -668,12 +684,31 @@ async def get_doc(doc_name: str):
 
 @app.get("/api/docs")
 async def list_docs():
-    """List available markdown docs."""
-    docs_path = Path(__file__).parent / "docs"
+    """List available markdown docs from packages and project folders."""
+    docs_base = Path(__file__).parent / "docs"
     docs = []
-    if docs_path.exists():
-        for file in docs_path.glob("*.md"):
+    
+    # List docs from packages folder
+    packages_path = docs_base / "packages"
+    if packages_path.exists():
+        for file in packages_path.glob("*.md"):
+            if file.name != "README.md" and file.name != "LINKS.md":
+                docs.append(f"packages-{file.stem}")
+    
+    # List docs from project folder
+    project_path = docs_base / "project"
+    if project_path.exists():
+        for file in project_path.glob("*.md"):
+            if file.name != "README.md":
+                docs.append(f"project-{file.stem}")
+    
+    # List index and core docs from root
+    for file in docs_base.glob("*.md"):
+        if file.name == "index.md":
+            docs.insert(0, "index")
+        elif file.name not in ["README.md"]:
             docs.append(file.stem)
+    
     return {"success": True, "docs": docs}
 
 

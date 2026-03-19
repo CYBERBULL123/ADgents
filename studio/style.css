@@ -2908,6 +2908,24 @@ textarea {
   border-left: 2px solid var(--accent);
 }
 
+.docs-section-header {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  cursor: default;
+  list-style: none;
+  display: block;
+}
+
+.docs-section-header:first-child {
+  margin-top: 0;
+}
+
 .docs-content-area {
   flex: 1;
   min-width: 0;

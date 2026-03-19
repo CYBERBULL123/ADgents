@@ -100,11 +100,11 @@ Integrate ADgents into your Python projects:
 
 | Guide | Purpose |
 |-------|---------|
-| [**Installation**](docs/packages/README.md) | Installation methods and setup |
-| [**Quick Integration**](docs/integration.md) | Add agents to your code |
-| [**API Reference**](docs/api_reference.md) | All Python APIs |
+| [**Installation**](docs/packages/installation.md) | Installation methods and setup |
+| [**Quick Integration**](docs/packages/integration.md) | Add agents to your code |
+| [**API Reference**](docs/packages/api_reference.md) | All Python APIs |
 | [**Custom Skills**](docs/packages/skills.md) | ⭐ Create & integrate custom skills |
-| [**Advanced Features**](docs/advanced.md) | Memory, optimization, LLM routing |
+| [**Advanced Features**](docs/packages/advanced.md) | Memory, optimization, LLM routing |
 
 **[→ Go to Package Integration Docs](docs/packages/README.md)**
 
@@ -113,10 +113,10 @@ Run and manage the ADgents application:
 
 | Guide | Purpose |
 |-------|---------|
-| [**Quickstart**](docs/quickstart.md) | Start in 5 minutes |
-| [**Studio UI**](docs/studio.md) | Web-based management |
-| [**Deployment**](docs/deployment.md) | Production setup |
-| [**Use Cases**](docs/use_cases.md) | Real-world examples |
+| [**Quickstart**](docs/project/quickstart.md) | Start in 5 minutes |
+| [**Studio UI**](docs/project/studio.md) | Web-based management |
+| [**Deployment**](docs/project/deployment.md) | Production setup |
+| [**Use Cases**](docs/project/use_cases.md) | Real-world examples |
 
 **[→ Go to Project Application Docs](docs/project/README.md)**
 

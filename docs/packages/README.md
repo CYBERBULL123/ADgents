@@ -15,8 +15,8 @@ Everything you need to integrate ADgents as a Python package into your projects.
 | Concept | Guide | Purpose |
 |---------|-------|---------|
 | **Agents** | [API Reference](api_reference.md) | Individual AI agents with personas |
-| **Skills** | [Skills Guide](skills.md) | Extend agents with custom capabilities |
-| **Crews** | [Crew Management](../project/crew.md) | Multi-agent teams for complex tasks |
+| **Skills** | [⭐ Custom Skills](skills.md) | Create and register custom capabilities |
+| **Crews** | [Crew Management](crew_management.md) | Multi-agent teams for complex tasks |
 | **Memory** | [Advanced Features](advanced.md) | Working, episodic, and semantic memory |
 | **LLMs** | [Advanced Features](advanced.md) | Using different AI models |
 

@@ -24,12 +24,12 @@ For developers integrating ADgents into their projects as a Python package:
 
 | Guide | Purpose |
 |-------|---------|
-| [**Installation & Setup**](installation.md) | System requirements, installation methods |
-| [**Integration Guide**](integration.md) | Add agents to your code + patterns |
-| [**API Reference**](api_reference.md) | Complete Python SDK documentation |
-| [**Crew Management**](crew_management.md) | Multi-agent teams |
-| [**Custom Skills**](packages/skills.md) | ⭐ NEW: Create & integrate skills |
-| [**Advanced Features**](advanced.md) | Memory, LLM routing, optimization |
+| [**Installation & Setup**](packages/installation.md) | System requirements, installation methods |
+| [**Integration Guide**](packages/integration.md) | Add agents to your code + patterns |
+| [**API Reference**](packages/api_reference.md) | Complete Python SDK documentation |
+| [**Crew Management**](packages/crew_management.md) | Multi-agent teams |
+| [**Custom Skills**](packages/skills.md) | ⭐ Create & integrate skills |
+| [**Advanced Features**](packages/advanced.md) | Memory, LLM routing, optimization |
 
 **Start here:** [Package Integration Guide](packages/README.md)
 
@@ -39,15 +39,14 @@ For running and using the ADgents application:
 
 | Guide | Purpose |
 |-------|---------|
-| [**Quickstart**](quickstart.md) | Get started in 5 minutes |
-| [**Studio Web UI**](studio.md) | Interactive agent management |
-| [**Architecture**](architecture.md) | System design overview |
-| [**Crew Coordination**](crew.md) | Multi-agent orchestration |
-| [**Real-World Use Cases**](use_cases.md) | Practical examples |
-| [**Deployment**](deployment.md) | Production setup |
-| [**Advanced: MCP Protocol**](mcp_adk.md) | Protocol implementation |
+| [**Quickstart**](project/quickstart.md) | Get started in 5 minutes |
+| [**Studio Web UI**](project/studio.md) | Interactive agent management |
+| [**Architecture**](project/architecture.md) | System design overview |
+| [**Crew Coordination**](project/crew.md) | Multi-agent orchestration |
+| [**Real-World Use Cases**](project/use_cases.md) | Practical examples |
+| [**Deployment**](project/deployment.md) | Production setup |
 
-**Start here:** [Project Quickstart](quickstart.md)
+**Start here:** [Project Quickstart](project/quickstart.md)
 
 ### 🔗 [Examples & Resources](../../EXAMPLES.md)
 
@@ -94,4 +93,4 @@ We currently natively support:
 - **Google Gemini:** `gemini-1.5-flash`, `gemini-1.5-pro`
 - **Ollama (Local):** `llama3`, `mistral`
 
-Check out our [Quickstart Guide](quickstart.md) to initialize your first agent!
+Check out our [Quickstart Guide](project/quickstart.md) to initialize your first agent!

@@ -1,777 +1,1071 @@
-# Creating & Integrating Custom Skills
+# Custom Skills Guide
 
-Learn how to create custom skills and extend agent capabilities.
+Learn how to create and integrate custom skills into ADgents agents from the pip package.
+
+## Table of Contents
+
+1. [What is a Skill?](#what-is-a-skill)
+2. [Built-in Skills](#built-in-skills)
+3. [Quick Start](#quick-start)
+4. [Skill Structure](#skill-structure)
+5. [Skill Categories](#skill-categories)
+6. [Using Skills in Agents](#using-skills-in-agents)
+7. [Advanced Patterns](#advanced-patterns)
+8. [Testing Skills](#testing-skills)
+9. [Best Practices](#best-practices)
+10. [Troubleshooting](#troubleshooting)
 
 ## What is a Skill?
 
-A skill is a Python function that an agent can call to accomplish tasks. Skills give agents agency to:
+A **skill** is a Python function that an agent can call to accomplish specific tasks. Skills give your agents agency to:
 
 - Execute code
-- Call APIs
+- Call external APIs
 - Read/write files
 - Interact with databases
 - Perform calculations
 - Process data
+- Send notifications
+- And more!
+
+Skills are registered with ADgents and become available to all agents in your application.
 
 ## Built-in Skills
 
-ADgents comes with these skills ready to use:
+ADgents includes these ready-to-use skills:
 
-| Skill | Description | Returns |
-|-------|-------------|---------|
-| `web_search` | Search the internet | Search results (str) |
-| `code_execute` | Run Python code | Execution result |
-| `file_read` | Read file contents | File content (str) |
-| `file_write` | Write to files | Success status (bool) |
-| `api_call` | Make HTTP requests | Response JSON |
-| `list_directory` | Browse directories | File listing (list) |
-| `get_datetime` | Get current date/time | Datetime string |
-| `calculate` | Evaluate math expressions | Numeric result |
-| `json_parse` | Parse JSON data | Parsed object |
-| `summarize_text` | Summarize text | Summary (str) |
+| Skill | Description | Input | Output |
+|-------|-------------|-------|--------|
+| `web_search` | Search the internet | `query: str` | `results: str` |
+| `code_execute` | Run Python code safely | `code: str` | `result: str` |
+| `file_read` | Read file contents | `path: str` | `content: str` |
+| `file_write` | Write to files | `path: str, content: str` | `success: bool` |
+| `api_call` | Make HTTP requests | `url: str, method: str, data: dict` | `response: dict` |
+| `list_directory` | Browse directories | `path: str` | `files: list` |
+| `get_datetime` | Get current date/time | - | `timestamp: str` |
+| `calculate` | Evaluate math expressions | `expression: str` | `result: float` |
+| `json_parse` | Parse JSON data | `data: str` | `parsed: dict` |
+| `summarize_text` | Summarize text | `text: str` | `summary: str` |
 
-## Creating a Custom Skill
+## Quick Start
 
-### Basic Skill Structure
+### 1. Install ADgents
+
+```bash
+pip install adgents
+```
+
+### 2. Create Your First Skill
 
 ```python
-from core.skills import register_skill
-from typing import Dict, Any
+from adgents.core.skills import register_skill
 
 @register_skill(
-    name="my_skill",
-    description="What this skill does",
+    name="greet_user",
+    description="Greet a user by name",
     parameters={
-        "param1": "Description of param1",
-        "param2": "Description of param2"
+        "name": "The user's name",
+        "tone": "Greeting tone: friendly, formal, or casual"
     },
     return_type="str"
 )
-def my_skill(param1: str, param2: int) -> str:
-    """Implement the skill."""
-    result = f"Processing {param1} with {param2}"
-    return result
+def greet_user(name: str, tone: str = "friendly") -> str:
+    """Generate a greeting for a user."""
+    greetings = {
+        "friendly": f"Hey there, {name}! 👋",
+        "formal": f"Greetings, {name}.",
+        "casual": f"Yo {name}!"
+    }
+    return greetings.get(tone, greetings["friendly"])
 ```
 
-### Complete Example: Email Skill
+### 3. Use the Skill in an Agent
 
 ```python
-from core.skills import register_skill
-from typing import Dict, List
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+from adgents.core.agent import Agent
+from adgents.core.persona import Persona
+
+agent = Agent(
+    persona=Persona(
+        name="Greeter",
+        role="Friendly Assistant",
+        expertise_domains=["Greetings"]
+    )
+)
+
+# Agent can now use the greet_user skill
+response = agent.chat("Please greet John in a formal way")
+```
+
+## Skill Structure
+
+### Basic Decorator Properties
+
+```python
+from adgents.core.skills import register_skill
+from typing import Dict, Any
 
 @register_skill(
-    name="send_email",
-    description="Send an email to recipients",
+    name="skill_name",                    # Unique skill identifier
+    description="What this skill does",   # Brief description
     parameters={
-        "to": "Email address or list of addresses",
-        "subject": "Email subject line",
-        "body": "Email body content",
-        "cc": "(Optional) CC recipients",
-        "bcc": "(Optional) BCC recipients"
+        "param1": "Description of param1",
+        "param2": "Description of param2",
     },
-    return_type="Dict"
+    return_type="str",                    # Return type hint
+    category="data_processing",           # Optional: skill category
+    version="1.0.0",                      # Optional: skill version
+    dependencies=["requests", "pandas"],  # Optional: required packages
+    timeout=30                            # Optional: execution timeout in seconds
 )
-def send_email(
-    to: str | List[str],
-    subject: str,
-    body: str,
-    cc: List[str] = None,
-    bcc: List[str] = None
+def skill_name(param1: str, param2: int) -> str:
+    """Implement your skill logic here."""
+    return f"Result: {param1} {param2}"
+```
+
+### Complete Skill Template
+
+```python
+from adgents.core.skills import register_skill
+from typing import Dict, Any, List, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+@register_skill(
+    name="my_skill",
+    description="Complete skill description",
+    parameters={
+        "input_data": "What the skill accepts",
+        "options": "Optional parameters"
+    },
+    return_type="Dict",
+    category="general",
+    version="1.0.0"
+)
+def my_skill(
+    input_data: str,
+    options: Dict[str, Any] = None
 ) -> Dict[str, Any]:
-    """Send email via SMTP."""
+    """
+    Complete skill implementation.
     
-    import os
-    from_email = os.getenv("EMAIL_ADDRESS")
-    password = os.getenv("EMAIL_PASSWORD")
-    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", 587))
-    
-    if not from_email or not password:
-        return {
-            "success": False,
-            "error": "EMAIL_ADDRESS or EMAIL_PASSWORD not set"
-        }
-    
+    Args:
+        input_data: The main input
+        options: Optional configuration dictionary
+        
+    Returns:
+        Dictionary with success, data, and any errors
+    """
     try:
-        # Create message
-        msg = MIMEMultipart()
-        msg['From'] = from_email
-        msg['To'] = to if isinstance(to, str) else ', '.join(to)
-        if cc:
-            msg['Cc'] = ', '.join(cc) if isinstance(cc, list) else cc
-        msg['Subject'] = subject
+        # Validate inputs
+        if not input_data:
+            return {
+                "success": False,
+                "error": "input_data is required"
+            }
         
-        msg.attach(MIMEText(body, 'plain'))
+        options = options or {}
         
-        # Send email
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-        server.login(from_email, password)
+        # Process the input
+        result = process_data(input_data, options)
         
-        recipients = to if isinstance(to, list) else [to]
-        if cc:
-            recipients.extend(cc if isinstance(cc, list) else [cc])
-        if bcc:
-            recipients.extend(bcc if isinstance(bcc, list) else [bcc])
-        
-        server.sendmail(from_email, recipients, msg.as_string())
-        server.quit()
-        
+        # Return structure
         return {
             "success": True,
-            "message": f"Email sent to {to}",
-            "recipients": recipients
+            "data": result,
+            "metadata": {
+                "processed_at": get_timestamp(),
+                "source": "my_skill"
+            }
         }
     
     except Exception as e:
+        logger.error(f"Skill error: {str(e)}")
         return {
             "success": False,
-            "error": str(e)
+            "error": str(e),
+            "data": None
         }
+
+def process_data(data: str, options: Dict) -> str:
+    """Helper function for processing."""
+    return f"Processed: {data}"
+
+def get_timestamp() -> str:
+    """Get current timestamp."""
+    from datetime import datetime
+    return datetime.now().isoformat()
 ```
 
 ## Skill Categories
 
-### Data Processing Skills
+Organize skills by category for better management and discovery.
+
+### 1. Data Processing Skills
+
+Process, transform, and analyze data.
 
 ```python
+from adgents.core.skills import register_skill
+import pandas as pd
+import json
+
 @register_skill(
-    name="process_csv",
-    description="Process CSV file and return statistics",
-    parameters={"file_path": "Path to CSV file"}
+    name="parse_csv",
+    description="Parse CSV content and return as JSON",
+    parameters={
+        "csv_content": "CSV data as string",
+        "headers": "Whether first row is headers"
+    },
+    return_type="Dict",
+    category="data_processing"
 )
-def process_csv(file_path: str) -> Dict:
-    """Process CSV and compute statistics."""
-    import pandas as pd
-    
+def parse_csv(csv_content: str, headers: bool = True) -> Dict:
+    """Parse CSV and return structured data."""
     try:
-        df = pd.read_csv(file_path)
+        from io import StringIO
+        df = pd.read_csv(StringIO(csv_content), header=0 if headers else None)
         return {
-            "rows": len(df),
-            "columns": list(df.columns),
-            "dtypes": df.dtypes.to_dict(),
-            "summary": df.describe().to_dict()
+            "success": True,
+            "data": df.to_dict(orient='records'),
+            "row_count": len(df)
         }
     except Exception as e:
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
 @register_skill(
-    name="transform_data",
-    description="Transform data with custom functions",
+    name="aggregate_data",
+    description="Aggregate data by key and calculate statistics",
     parameters={
-        "data": "Input data",
-        "transformation": "Type: normalize, standardize, or aggregate"
-    }
+        "data": "List of dictionaries",
+        "group_by": "Key to group by",
+        "aggregate_field": "Field to aggregate",
+        "method": "Aggregation method: sum, avg, count, min, max"
+    },
+    return_type="Dict",
+    category="data_processing"
 )
-def transform_data(data: List[float], transformation: str) -> List[float]:
-    """Transform numerical data."""
-    import statistics
-    
-    if transformation == "normalize":
-        min_val = min(data)
-        max_val = max(data)
-        span = max_val - min_val
-        return [(x - min_val) / span for x in data]
-    
-    elif transformation == "standardize":
-        mean = statistics.mean(data)
-        stdev = statistics.stdev(data)
-        return [(x - mean) / stdev for x in data]
-    
-    elif transformation == "aggregate":
-        return [statistics.mean(data), statistics.median(data), statistics.stdev(data)]
-    
-    return data
-```
-
-### API Integration Skills
-
-```python
-@register_skill(
-    name="call_external_api",
-    description="Call external REST API",
-    parameters={
-        "url": "API endpoint URL",
-        "method": "HTTP method (GET, POST, PUT, DELETE)",
-        "headers": "(Optional) Request headers",
-        "body": "(Optional) Request body"
-    }
-)
-def call_external_api(
-    url: str,
-    method: str = "GET",
-    headers: Dict = None,
-    body: Dict = None
+def aggregate_data(
+    data: list,
+    group_by: str,
+    aggregate_field: str,
+    method: str = "sum"
 ) -> Dict:
-    """Call external API and return response."""
-    import httpx
-    import json
-    
+    """Aggregate data using pandas."""
     try:
-        with httpx.Client() as client:
-            if method == "GET":
-                response = client.get(url, headers=headers or {})
-            elif method == "POST":
-                response = client.post(url, headers=headers or {}, json=body)
-            elif method == "PUT":
-                response = client.put(url, headers=headers or {}, json=body)
-            elif method == "DELETE":
-                response = client.delete(url, headers=headers or {})
-            else:
-                return {"error": f"Unsupported method: {method}"}
-            
-            return {
-                "status": response.status_code,
-                "headers": dict(response.headers),
-                "body": response.json() if response.headers.get('content-type') == 'application/json' else response.text
-            }
-    
-    except Exception as e:
-        return {"error": str(e)}
-
-@register_skill(
-    name="webhook_notify",
-    description="Send notification to webhook",
-    parameters={
-        "webhook_url": "Webhook endpoint",
-        "event": "Event type",
-        "data": "Event data"
-    }
-)
-def webhook_notify(webhook_url: str, event: str, data: Dict) -> Dict:
-    """Send webhook notification."""
-    import httpx
-    
-    try:
-        with httpx.Client() as client:
-            response = client.post(
-                webhook_url,
-                json={"event": event, "data": data}
-            )
-            return {
-                "success": response.status_code == 200,
-                "status_code": response.status_code
-            }
+        df = pd.DataFrame(data)
+        if method == "sum":
+            result = df.groupby(group_by)[aggregate_field].sum()
+        elif method == "avg":
+            result = df.groupby(group_by)[aggregate_field].mean()
+        elif method == "count":
+            result = df.groupby(group_by)[aggregate_field].count()
+        elif method == "min":
+            result = df.groupby(group_by)[aggregate_field].min()
+        elif method == "max":
+            result = df.groupby(group_by)[aggregate_field].max()
+        else:
+            return {"success": False, "error": f"Unknown method: {method}"}
+        
+        return {
+            "success": True,
+            "data": result.to_dict()
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 ```
 
-### Database Skills
+### 2. API Integration Skills
+
+Call external APIs and integrate services.
+
+```python
+@register_skill(
+    name="fetch_weather",
+    description="Fetch weather data from OpenWeatherMap API",
+    parameters={
+        "city": "City name",
+        "units": "Temperature units: metric or imperial"
+    },
+    return_type="Dict",
+    category="api_integration"
+)
+def fetch_weather(city: str, units: str = "metric") -> Dict:
+    """Get weather for a city."""
+    import requests
+    import os
+    
+    api_key = os.getenv("OPENWEATHER_API_KEY")
+    if not api_key:
+        return {"success": False, "error": "API key not configured"}
+    
+    try:
+        url = f"https://api.openweathermap.org/data/2.5/weather"
+        params = {
+            "q": city,
+            "units": units,
+            "appid": api_key
+        }
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        return {
+            "success": True,
+            "data": {
+                "city": data.get("name"),
+                "temperature": data["main"].get("temp"),
+                "description": data["weather"][0].get("description"),
+                "humidity": data["main"].get("humidity")
+            }
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@register_skill(
+    name="post_to_slack",
+    description="Send a message to a Slack channel",
+    parameters={
+        "channel": "Slack channel name or ID",
+        "message": "Message to send",
+        "thread_ts": "Thread timestamp (optional)"
+    },
+    return_type="Dict",
+    category="api_integration"
+)
+def post_to_slack(channel: str, message: str, thread_ts: str = None) -> Dict:
+    """Post message to Slack."""
+    import requests
+    import os
+    
+    webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+    if not webhook_url:
+        return {"success": False, "error": "Slack webhook not configured"}
+    
+    try:
+        payload = {
+            "channel": channel,
+            "text": message
+        }
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        
+        response = requests.post(webhook_url, json=payload, timeout=10)
+        response.raise_for_status()
+        
+        return {"success": True, "data": "Message posted"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+```
+
+### 3. Database Skills
+
+Query, insert, and update data in databases.
 
 ```python
 @register_skill(
     name="query_database",
-    description="Query data from database",
+    description="Execute SQL query and return results",
     parameters={
-        "db_url": "Database connection URL",
-        "query": "SQL query",
-        "params": "(Optional) Query parameters"
-    }
+        "query": "SQL query to execute",
+        "database": "Database identifier",
+        "limit": "Max rows to return"
+    },
+    return_type="Dict",
+    category="database"
 )
-def query_database(db_url: str, query: str, params: Dict = None) -> Dict:
+def query_database(query: str, database: str = "default", limit: int = 100) -> Dict:
     """Execute database query."""
-    import sqlalchemy
+    import sqlite3
+    import os
     
     try:
-        engine = sqlalchemy.create_engine(db_url)
-        with engine.connect() as connection:
-            result = connection.execute(
-                sqlalchemy.text(query),
-                params or {}
-            )
-            rows = [dict(row._mapping) for row in result]
-            return {
-                "success": True,
-                "rows": rows,
-                "count": len(rows)
-            }
+        db_path = os.getenv(f"DB_{database.upper()}_PATH", "data.db")
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Prevent SQL injection - basic protection
+        if any(keyword in query.upper() for keyword in ["DROP", "DELETE FROM", "TRUNCATE"]):
+            return {"success": False, "error": "Destructive queries not allowed"}
+        
+        cursor.execute(query)
+        rows = cursor.fetchall()[:limit]
+        
+        # Get column names
+        columns = [description[0] for description in cursor.description]
+        
+        # Convert to list of dicts
+        results = [dict(zip(columns, row)) for row in rows]
+        
+        conn.close()
+        
+        return {
+            "success": True,
+            "data": results,
+            "row_count": len(results)
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 @register_skill(
-    name="insert_records",
-    description="Insert records into database",
+    name="insert_record",
+    description="Insert a record into the database",
     parameters={
-        "db_url": "Database connection URL",
         "table": "Table name",
-        "records": "List of record dictionaries"
-    }
+        "record": "Record data as dictionary",
+        "database": "Database identifier"
+    },
+    return_type="Dict",
+    category="database"
 )
-def insert_records(db_url: str, table: str, records: List[Dict]) -> Dict:
-    """Insert records into database."""
-    import sqlalchemy
+def insert_record(table: str, record: dict, database: str = "default") -> Dict:
+    """Insert record into database."""
+    import sqlite3
+    import os
     
     try:
-        engine = sqlalchemy.create_engine(db_url)
-        with engine.connect() as connection:
-            connection.execute(
-                sqlalchemy.insert(sqlalchemy.table(table)),
-                records
-            )
-            connection.commit()
-            return {
-                "success": True,
-                "inserted": len(records)
-            }
+        db_path = os.getenv(f"DB_{database.upper()}_PATH", "data.db")
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        columns = ", ".join(record.keys())
+        placeholders = ", ".join(["?" for _ in record.keys()])
+        query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
+        
+        cursor.execute(query, list(record.values()))
+        conn.commit()
+        
+        record_id = cursor.lastrowid
+        conn.close()
+        
+        return {
+            "success": True,
+            "data": {"id": record_id},
+            "message": f"Record inserted with ID: {record_id}"
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 ```
 
-### Async Skills
+### 4. Async Skills
+
+Long-running operations with async/await.
 
 ```python
-from core.skills import register_skill
+from adgents.core.skills import register_skill
 import asyncio
 
 @register_skill(
-    name="async_fetch_data",
-    description="Fetch data asynchronously",
-    parameters={"urls": "List of URLs to fetch"},
-    async_support=True
+    name="batch_process",
+    description="Process items asynchronously",
+    parameters={
+        "items": "List of items to process",
+        "delay": "Delay between items in seconds"
+    },
+    return_type="Dict",
+    category="async"
 )
-async def async_fetch_data(urls: List[str]) -> Dict:
-    """Fetch multiple URLs concurrently."""
-    import aiohttp
-    
-    async def fetch(session, url):
-        try:
-            async with session.get(url, timeout=10) as response:
-                return {
-                    "url": url,
-                    "status": response.status,
-                    "data": await response.text()
-                }
-        except Exception as e:
-            return {"url": url, "error": str(e)}
+def batch_process(items: list, delay: float = 0.5) -> Dict:
+    """Process items with async support."""
+    async def process_async():
+        results = []
+        for i, item in enumerate(items):
+            await asyncio.sleep(delay)
+            results.append(f"Processed: {item}")
+        return results
     
     try:
-        async with aiohttp.ClientSession() as session:
-            tasks = [fetch(session, url) for url in urls]
-            results = await asyncio.gather(*tasks)
-            return {
-                "success": True,
-                "results": results
-            }
+        # Run async function
+        loop = asyncio.get_event_loop()
+        results = loop.run_until_complete(process_async())
+        
+        return {
+            "success": True,
+            "data": results,
+            "processed_count": len(results)
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 ```
 
-## Conditional Skills
+### 5. Conditional Skills
 
-Execute skills only under certain conditions:
-
-```python
-@register_skill(
-    name="admin_command",
-    description="Execute admin command",
-    parameters={"command": "Admin command to execute"},
-    conditions={
-        "requires_permission": "admin",
-        "enabled_in": ["production", "staging"],
-        "min_autonomy_level": 4
-    }
-)
-def admin_command(command: str) -> Dict:
-    """Execute privileged command."""
-    # Implementation
-    return {"result": "Command executed"}
-```
-
-## Skill Validation
-
-### Type Hints
-
-Always use type hints for parameters and return values:
+Skills that execute based on conditions.
 
 ```python
 @register_skill(
-    name="typed_skill",
+    name="validate_and_process",
+    description="Validate input and process if valid",
     parameters={
-        "count": "Integer count",
-        "items": "List of items",
-        "config": "Configuration dictionary"
-    }
+        "data": "Data to validate",
+        "rules": "Validation rules as dictionary"
+    },
+    return_type="Dict",
+    category="conditional"
 )
-def typed_skill(count: int, items: List[str], config: Dict) -> Dict:
-    """Skill with proper type hints."""
+def validate_and_process(data: dict, rules: dict) -> Dict:
+    """Validate data against rules before processing."""
+    errors = []
+    
+    # Validate required fields
+    for field in rules.get("required", []):
+        if field not in data:
+            errors.append(f"Required field missing: {field}")
+    
+    # Validate field types
+    for field, expected_type in rules.get("types", {}).items():
+        if field in data:
+            if not isinstance(data[field], eval(expected_type)):
+                errors.append(f"Field {field} has wrong type")
+    
+    if errors:
+        return {
+            "success": False,
+            "errors": errors,
+            "data": None
+        }
+    
+    # Process if valid
+    result = process_valid_data(data)
+    
     return {
-        "count": count,
-        "items_count": len(items),
-        "config_keys": list(config.keys())
+        "success": True,
+        "data": result,
+        "validated": True
     }
-```
 
-### Error Handling
-
-Always handle errors gracefully:
-
-```python
-@register_skill(
-    name="safe_skill",
-    description="Skill with error handling",
-    parameters={"data": "Input data"}
-)
-def safe_skill(data: Any) -> Dict:
-    """Safe skill with error handling."""
-    try:
-        # Process data
-        result = str(data).upper()
-        return {
-            "success": True,
-            "result": result
-        }
-    except TypeError as e:
-        return {
-            "success": False,
-            "error": f"Type error: {str(e)}",
-            "error_type": "TypeError"
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "error_type": type(e).__name__
-        }
+def process_valid_data(data: dict) -> dict:
+    """Process validated data."""
+    return {
+        "processed": True,
+        "fields_count": len(data),
+        "keys": list(data.keys())
+    }
 ```
 
 ## Using Skills in Agents
 
-### Automatic Skill Usage
-
-Agents automatically discover and use registered skills:
+### Register Skills Globally
 
 ```python
-from core.agent import Agent
-from core.persona import Persona
+from adgents.core.skills import register_skill, SKILL_REGISTRY
 
-# Register a skill
-from my_skills import send_email
-
-# Agent will automatically use it
-agent = Agent(persona=Persona(name="Assistant", role="Helper"))
-
-# Agent calls send_email automatically
-response = agent.chat(
-    "Send an email to john@example.com with subject 'Hello' and body 'Hi there'"
-)
-```
-
-### Task-Based Skill Usage
-
-```python
-# Agent chooses appropriate skills for the task
-result = agent.run_task(
-    "Read the data.csv file, calculate statistics for numeric columns, "
-    "and send a summary to admin@example.com"
-)
-# Agent will: file_read → process_csv → send_email
-```
-
-### Manual Skill Invocation
-
-```python
-from core.skills import get_skill
-
-# Manually call a skill
-email_skill = get_skill("send_email")
-result = email_skill(
-    to="user@example.com",
-    subject="Test",
-    body="Hello"
-)
-```
-
-## Skill Organization
-
-### Project Structure
-
-```
-project/
-├── skills/
-│   ├── __init__.py
-│   ├── data_processing.py    # Data-related skills
-│   ├── api_integration.py    # API-related skills
-│   ├── email.py              # Email skills
-│   ├── database.py           # Database skills
-│   └── custom.py             # Domain-specific skills
-└── core/
-```
-
-### Register All Skills
-
-```python
-# skills/__init__.py
-from .data_processing import *
-from .api_integration import *
-from .email import *
-from .database import *
-from .custom import *
-
-# In main app
-import skills  # This registers all skills
-```
-
-## Advanced Skills
-
-### Skill Metadata
-
-Add metadata to skills:
-
-```python
+# Create your skills
 @register_skill(
-    name="advanced_skill",
-    description="Advanced skill with metadata",
-    parameters={"input": "Input data"},
-    metadata={
-        "version": "1.0.0",
-        "author": "Your Name",
-        "tags": ["data", "processing"],
-        "performance": "high",
-        "cost": "low"  # LLM API cost
+    name="calculate_total",
+    description="Calculate total from list of numbers",
+    parameters={"numbers": "List of numbers"}
+)
+def calculate_total(numbers: list) -> Dict:
+    return {"success": True, "total": sum(numbers)}
+
+@register_skill(
+    name="format_currency",
+    description="Format number as currency",
+    parameters={"amount": "Amount to format"}
+)
+def format_currency(amount: float) -> Dict:
+    return {"success": True, "formatted": f"${amount:,.2f}"}
+
+# Skills are now available to all agents
+print("Registered skills:", list(SKILL_REGISTRY._skills.keys()))
+```
+
+### Use Skills in Agent Tasks
+
+```python
+from adgents.core.agent import Agent
+from adgents.core.persona import Persona
+from adgents.core.crew_manager import CrewManager
+
+# Create agent with persona
+agent = Agent(
+    persona=Persona(
+        name="Calculator",
+        role="Financial Analyst",
+        expertise_domains=["Finance", "Mathematics"]
+    )
+)
+
+# Agent can now use registered skills
+response = agent.chat(
+    "Calculate the total of [100, 200, 300] and format it as currency"
+)
+print(response)
+```
+
+### Get Skill Information in Code
+
+```python
+from adgents.core.skills import SKILL_REGISTRY
+
+# Get all skills
+all_skills = SKILL_REGISTRY._skills
+print(f"Available skills: {list(all_skills.keys())}")
+
+# Get specific skill
+skill = SKILL_REGISTRY._skills.get("calculate_total")
+if skill:
+    print(f"Skill: {skill.name}")
+    print(f"Description: {skill.description}")
+    print(f"Parameters: {skill.parameters}")
+```
+
+## Advanced Patterns
+
+### 1. Skill with State Management
+
+```python
+from adgents.core.skills import register_skill
+from typing import Dict, Any
+
+class SkillState:
+    """Manage skill execution state."""
+    def __init__(self):
+        self.cache = {}
+        self.call_count = 0
+    
+    def reset(self):
+        self.cache.clear()
+        self.call_count = 0
+
+state = SkillState()
+
+@register_skill(
+    name="cached_lookup",
+    description="Lookup with caching",
+    parameters={"key": "Key to lookup"}
+)
+def cached_lookup(key: str) -> Dict:
+    """Lookup with caching support."""
+    state.call_count += 1
+    
+    if key in state.cache:
+        return {
+            "success": True,
+            "data": state.cache[key],
+            "cached": True
+        }
+    
+    # Perform lookup
+    result = expensive_lookup(key)
+    state.cache[key] = result
+    
+    return {
+        "success": True,
+        "data": result,
+        "cached": False
+    }
+
+def expensive_lookup(key: str) -> str:
+    """Simulate expensive operation."""
+    import time
+    time.sleep(0.5)
+    return f"Result for {key}"
+```
+
+### 2. Skill with Retry Logic
+
+```python
+from adgents.core.skills import register_skill
+import time
+
+@register_skill(
+    name="resilient_api_call",
+    description="API call with retry logic",
+    parameters={
+        "url": "URL to call",
+        "max_retries": "Max retry attempts"
     }
 )
-def advanced_skill(input: str) -> str:
-    return f"Processed: {input}"
+def resilient_api_call(url: str, max_retries: int = 3) -> Dict:
+    """Call API with retry logic."""
+    import requests
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            return {
+                "success": True,
+                "data": response.json(),
+                "attempts": attempt + 1
+            }
+        except requests.RequestException as e:
+            if attempt == max_retries - 1:
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "attempts": attempt + 1
+                }
+            # Exponential backoff
+            wait_time = 2 ** attempt
+            time.sleep(wait_time)
 ```
 
-### Skill Versioning
+### 3. Skill Composition
 
 ```python
-# Version 1
-@register_skill(name="process_v1")
-def process_v1(data: str) -> str:
-    return data.upper()
+from adgents.core.skills import register_skill, SKILL_REGISTRY
 
-# Version 2 (improved)
 @register_skill(
-    name="process_v2",
-    metadata={"replaces": "process_v1"}
+    name="compose_skills",
+    description="Compose multiple skills in sequence",
+    parameters={"input_data": "Initial input"}
 )
-def process_v2(data: str) -> str:
-    return data.upper().strip()
-
-# Agents will prefer v2
+def compose_skills(input_data: str) -> Dict:
+    """Chain multiple skills together."""
+    try:
+        # Get skills from registry
+        skill1 = SKILL_REGISTRY._skills.get("format_text")
+        skill2 = SKILL_REGISTRY._skills.get("validate_text")
+        
+        # Execute in sequence
+        result1 = skill1.func(input_data)
+        if not result1["success"]:
+            return {"success": False, "error": "Step 1 failed"}
+        
+        result2 = skill2.func(result1["data"])
+        if not result2["success"]:
+            return {"success": False, "error": "Step 2 failed"}
+        
+        return {
+            "success": True,
+            "data": result2["data"],
+            "steps": 2
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 ```
 
-### Skill Dependencies
+### 4. Skill Versioning
 
 ```python
+from adgents.core.skills import register_skill
+
+# Version 1.0
 @register_skill(
-    name="complex_skill",
-    parameters={"data": "Data"},
-    dependencies=["skill1", "skill2"]  # Requires these skills
+    name="process_data",
+    description="Process data (v1.0 - basic)",
+    version="1.0.0",
+    parameters={"data": "Input data"}
 )
-def complex_skill(data: str) -> str:
-    """Uses other skills internally."""
-    # First use skill1
-    intermediate = get_skill("skill1")(data)
-    # Then use skill2
-    result = get_skill("skill2")(intermediate)
-    return result
-```
+def process_data_v1(data: str) -> Dict:
+    """Basic processing."""
+    return {"success": True, "data": f"V1: {data}"}
 
-### Tool Calling (Model-Native)
-
-For compatible models (GPT-4, Claude, Gemini):
-
-```python
+# Version 2.0 (enhanced)
 @register_skill(
-    name="model_native_skill",
-    description="Skill using model-native tool calling",
-    parameters={"query": "User query"},
-    model_native=True  # Enable for GPT-4, Claude, Gemini
+    name="process_data_v2",
+    description="Process data (v2.0 - enhanced)",
+    version="2.0.0",
+    parameters={"data": "Input data", "options": "Processing options"}
 )
-def model_native_skill(query: str) -> str:
-    """Model can call this as a native tool."""
-    return f"Result: {query}"
+def process_data_v2(data: str, options: dict = None) -> Dict:
+    """Enhanced processing with options."""
+    options = options or {}
+    return {"success": True, "data": f"V2: {data}", "options_applied": bool(options)}
 ```
 
 ## Testing Skills
 
-### Unit Tests
+### Unit Testing
 
 ```python
 import pytest
-from skills.email import send_email
+from adgents.core.skills import register_skill
 
-def test_send_email_success(mocker):
-    """Test successful email send."""
-    mock_smtp = mocker.patch('smtplib.SMTP')
-    
-    result = send_email(
-        to="test@example.com",
-        subject="Test",
-        body="Test body"
-    )
-    
-    assert result["success"] == True
-    assert "sent to" in result["message"]
+@register_skill(
+    name="add_numbers",
+    description="Add two numbers",
+    parameters={"a": "First number", "b": "Second number"}
+)
+def add_numbers(a: float, b: float) -> Dict:
+    """Add two numbers."""
+    return {"success": True, "result": a + b}
 
-def test_send_email_missing_credentials(mocker):
-    """Test missing credentials."""
-    mocker.patch.dict('os.environ', {}, clear=True)
+# Test the skill
+def test_add_numbers():
+    from adgents.core.skills import SKILL_REGISTRY
+    skill = SKILL_REGISTRY._skills.get("add_numbers")
     
-    result = send_email(
-        to="test@example.com",
-        subject="Test",
-        body="Test"
-    )
+    result = skill.func(5, 3)
+    assert result["success"] is True
+    assert result["result"] == 8
+
+def test_add_numbers_with_floats():
+    from adgents.core.skills import SKILL_REGISTRY
+    skill = SKILL_REGISTRY._skills.get("add_numbers")
     
-    assert result["success"] == False
-    assert "not set" in result["error"]
+    result = skill.func(5.5, 3.2)
+    assert result["success"] is True
+    assert abs(result["result"] - 8.7) < 0.01
 ```
 
-### Integration Tests
+### Integration Testing
 
 ```python
-@pytest.mark.asyncio
-async def test_skill_with_agent():
-    """Test skill integration with agent."""
-    from core.agent import Agent
-    
-    agent = Agent(persona=Persona(name="Test", role="Tester"))
-    
-    result = agent.chat(
-        "Use the send_email skill to send test@example.com a message"
+import pytest
+from adgents.core.agent import Agent
+from adgents.core.persona import Persona
+
+def test_agent_uses_skill():
+    """Test that agent can use registered skills."""
+    agent = Agent(
+        persona=Persona(
+            name="Tester",
+            role="Test Agent",
+            expertise_domains=["Testing"]
+        )
     )
     
-    assert result is not None
+    # Agent should be able to use registered skills
+    response = agent.chat("Please add 5 and 3")
+    assert response is not None
+    assert "8" in str(response)
 ```
 
 ## Best Practices
 
-### 1. Clear Descriptions
+### 1. Error Handling
+
+Always return consistent error format:
 
 ```python
-# ✅ Good
 @register_skill(
-    name="extract_emails",
-    description="Extract email addresses from text using regex patterns. "
-                "Returns a list of valid email addresses found.",
-    parameters={"text": "Text to search for email addresses"}
+    name="safe_operation",
+    description="Operation with proper error handling",
+    parameters={"input": "Input data"}
 )
-def extract_emails(text: str) -> List[str]:
-    pass
-
-# ❌ Bad
-@register_skill(name="extract", description="Extracts stuff")
-def extract(text):
-    pass
-```
-
-### 2. Comprehensive Error Handling
-
-```python
-@register_skill(...)
-def safe_operation(data: str) -> Dict:
+def safe_operation(input: str) -> Dict:
+    """Operation with error handling."""
     try:
-        # Main logic
-        result = process(data)
-        return {"success": True, "result": result}
+        # Validate input
+        if not isinstance(input, str):
+            return {
+                "success": False,
+                "error": "Input must be string",
+                "error_type": "validation_error"
+            }
+        
+        # Perform operation
+        result = perform_operation(input)
+        
+        return {
+            "success": True,
+            "data": result,
+            "error": None
+        }
+    
     except ValueError as e:
-        return {"success": False, "error": "Invalid input", "details": str(e)}
-    except TimeoutError:
-        return {"success": False, "error": "Operation timed out"}
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "value_error"
+        }
     except Exception as e:
-        # Log unexpected errors
-        import logging
-        logging.error(f"Unexpected error: {e}", exc_info=True)
-        return {"success": False, "error": "Unexpected error occurred"}
+        return {
+            "success": False,
+            "error": f"Unexpected error: {str(e)}",
+            "error_type": "unexpected_error"
+        }
+
+def perform_operation(data: str) -> str:
+    """Perform the operation."""
+    return data.upper()
 ```
 
-### 3. Performance Optimization
+### 2. Input Validation
+
+Validate inputs thoroughly:
 
 ```python
 @register_skill(
-    name="cached_operation",
-    parameters={"query": "Search query"},
-    metadata={"cache_results": True}
+    name="validated_skill",
+    description="Skill with input validation",
+    parameters={
+        "email": "Email address",
+        "age": "Age in years"
+    }
 )
-def cached_operation(query: str) -> Dict:
-    """Cache results for performance."""
-    from functools import lru_cache
+def validated_skill(email: str, age: int) -> Dict:
+    """Skill with validation."""
+    # Validate email
+    if not is_valid_email(email):
+        return {"success": False, "error": "Invalid email format"}
     
-    @lru_cache(maxsize=128)
-    def _cached_search(q: str):
-        # Expensive operation
-        return search_database(q)
+    # Validate age
+    if not isinstance(age, int) or age < 0 or age > 150:
+        return {"success": False, "error": "Invalid age"}
     
-    return _cached_search(query)
+    return {"success": True, "data": "Validation passed"}
+
+def is_valid_email(email: str) -> bool:
+    """Simple email validation."""
+    import re
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return bool(re.match(pattern, email))
 ```
 
-### 4. Security Consideration
+### 3. Documentation
+
+Provide clear skill descriptions:
 
 ```python
 @register_skill(
-    name="secure_skill",
-    parameters={"api_key": "API key (sensitive)"},
-    metadata={"sensitive_params": ["api_key"]}
+    name="well_documented_skill",
+    description="Calculate factorial of a number",
+    parameters={
+        "number": "Non-negative integer to calculate factorial for"
+    },
+    return_type="Dict",
+    category="math"
 )
-def secure_skill(api_key: str) -> Dict:
-    """Use sensitive parameters safely."""
-    # Don't log sensitive data
-    import os
+def well_documented_skill(number: int) -> Dict:
+    """
+    Calculate the factorial of a number.
     
-    # Use environment variables instead
-    key = os.getenv("API_KEY")
+    Args:
+        number: Non-negative integer (0-20 recommended)
     
-    # Mask in logs
-    masked_key = key[:4] + "..." + key[-4:] if key else "MISSING"
-    logging.info(f"Using API key: {masked_key}")
+    Returns:
+        Dictionary with:
+        - success: bool, operation status
+        - data: int, calculated factorial
+        - error: str, error message if failed
+    
+    Examples:
+        >>> well_documented_skill(5)
+        {'success': True, 'data': 120}
+        
+        >>> well_documented_skill(-1)
+        {'success': False, 'error': 'Number must be non-negative'}
+    """
+    if not isinstance(number, int) or number < 0:
+        return {
+            "success": False,
+            "error": "Number must be a non-negative integer"
+        }
+    
+    result = 1
+    for i in range(2, number + 1):
+        result *= i
+    
+    return {"success": True, "data": result}
 ```
 
-## Skill Marketplace (Future)
-
-Share and discover skills:
+### 4. Performance Considerations
 
 ```python
-# Coming soon: ADgents Skills Marketplace
-# - Community-contributed skills
-# - Verified and tested skills
-# - Version management
-# - One-click installation
+@register_skill(
+    name="performant_skill",
+    description="Skill with performance optimization",
+    parameters={"data": "Large dataset"}
+)
+def performant_skill(data: list) -> Dict:
+    """Skill with optimization."""
+    import time
+    start = time.time()
+    
+    # Use efficient algorithms
+    # Set timeouts
+    # Implement caching
+    
+    result = process_efficiently(data)
+    
+    duration = time.time() - start
+    
+    return {
+        "success": True,
+        "data": result,
+        "execution_time_ms": round(duration * 1000, 2)
+    }
+
+def process_efficiently(data: list) -> list:
+    """Process data efficiently."""
+    # Use set for O(1) lookups instead of list
+    # Use generators for large datasets
+    # Avoid nested loops when possible
+    return sorted(set(data))
 ```
 
 ## Troubleshooting
 
-### Skill Not Being Called
+### Skill Not Found
+
+**Problem:** Agent can't find your skill
+
+**Solutions:**
+- Ensure skill is registered using `@register_skill` decorator
+- Import the module containing your skill before creating agents
+- Check skill name matches exactly (case-sensitive)
 
 ```python
-# Check if skill is registered
-from core.skills import SKILL_REGISTRY
+# Make sure to import your skills module
+import my_skills  # This registers all skills in the module
 
-if "my_skill" not in SKILL_REGISTRY:
-    print("Skill not registered")
-else:
-    print("Skill is registered")
-
-# Check skill metadata
-skill = SKILL_REGISTRY.get("my_skill")
-print(f"Name: {skill.name}")
-print(f"Description: {skill.description}")
+from adgents.core.skills import SKILL_REGISTRY
+print("Available:", list(SKILL_REGISTRY._skills.keys()))
 ```
 
-### Skill Execution Errors
+### Skill Exception
+
+**Problem:** Skill throws an error during execution
+
+**Solution:** Add try-except and proper error handling
 
 ```python
-# Enable debug logging
-import logging
-logging.basicConfig(level=logging.DEBUG)
+@register_skill(
+    name="safe_skill",
+    description="Safe skill with error handling"
+)
+def safe_skill(data: str) -> Dict:
+    try:
+        result = risky_operation(data)
+        return {"success": True, "data": result}
+    except Exception as e:
+        import logging
+        logging.error(f"Skill error: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "tip": "Check input format and parameters"
+        }
+```
 
-# Test skill directly
-from core.skills import get_skill
+### Skill Performance Issues
 
-skill = get_skill("my_skill")
-result = skill(param1="test")
-print(f"Result: {result}")
+**Problem:** Skill runs too slowly
+
+**Solutions:**
+- Add timeout parameter
+- Implement caching
+- Use async/await for I/O operations
+- Profile with `time.time()`
+
+```python
+@register_skill(
+    name="fast_skill",
+    description="Optimized skill",
+    timeout=5  # 5 second timeout
+)
+def fast_skill(data: str) -> Dict:
+    import time
+    start = time.time()
+    
+    result = quick_operation(data)
+    
+    duration = time.time() - start
+    if duration > 1.0:
+        print(f"Warning: Skill took {duration}s")
+    
+    return {"success": True, "data": result}
 ```
 
 ## Next Steps
 
-- [Integration Guide](integration.md) - Integrate into your projects
+- [Integration Guide](integration.md) - Integrate skills into your app
 - [API Reference](api_reference.md) - Complete API documentation
-- [Advanced Features](advanced.md) - Advanced patterns
-- [Examples](../../../EXAMPLES.md) - Real-world examples
+- [Advanced Features](advanced.md) - Memory, LLM routing, and more
+- [Examples](../../EXAMPLES.md) - Real-world skill examples

@@ -1,4 +1,4 @@
-kl# ADgents Crew Management & Agent Communication System
+# ADgents Crew Management & Agent Communication System
 
 ## Overview
 

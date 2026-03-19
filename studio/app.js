@@ -1442,11 +1442,26 @@ async function loadDocs() {
         const docs = data.docs || [];
         state.docsLoaded = true;
         
-        // Preferred ordering if these files exist
-        const order = ['index', 'quickstart', 'architecture', 'studio', 'sdk', 'skills', 'use_cases', 'crew', 'mcp_adk', 'deployment'];
-        docs.sort((a, b) => {
-            const idxA = order.indexOf(a);
-            const idxB = order.indexOf(b);
+        // Organize docs by section
+        const packagesDocs = docs.filter(d => d.startsWith('packages-')).map(d => d.replace('packages-', ''));
+        const projectDocs = docs.filter(d => d.startsWith('project-')).map(d => d.replace('project-', ''));
+        
+        // Preferred ordering within sections
+        const packagesOrder = ['installation', 'integration', 'api_reference', 'crew_management', 'skills', 'advanced'];
+        const projectOrder = ['quickstart', 'architecture', 'studio', 'crew', 'use_cases', 'deployment'];
+        
+        packagesDocs.sort((a, b) => {
+            const idxA = packagesOrder.indexOf(a);
+            const idxB = packagesOrder.indexOf(b);
+            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+            if (idxA !== -1) return -1;
+            if (idxB !== -1) return 1;
+            return a.localeCompare(b);
+        });
+        
+        projectDocs.sort((a, b) => {
+            const idxA = projectOrder.indexOf(a);
+            const idxB = projectOrder.indexOf(b);
             if (idxA !== -1 && idxB !== -1) return idxA - idxB;
             if (idxA !== -1) return -1;
             if (idxB !== -1) return 1;
@@ -1456,10 +1471,31 @@ async function loadDocs() {
         const listEl = document.getElementById('docs-nav-list');
         if (!listEl) return;
         
-        listEl.innerHTML = docs.map(d => {
-            const label = d === 'index' ? 'Overview' : (d.charAt(0).toUpperCase() + d.slice(1));
-            return `<li class="docs-nav-item" id="nav-doc-${d}" onclick="loadDocContent('${d}')">${escapeHtml(label)}</li>`;
-        }).join('');
+        // Build HTML with sections
+        let html = '';
+        
+        // Index first
+        html += '<li class="docs-nav-item" id="nav-doc-index" onclick="loadDocContent(\'index\')">📘 Overview</li>';
+        
+        // Package integration section
+        if (packagesDocs.length > 0) {
+            html += '<li class="docs-section-header">📦 Package Integration</li>';
+            packagesDocs.forEach(d => {
+                const label = d.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                html += `<li class="docs-nav-item" id="nav-doc-packages-${d}" onclick="loadDocContent('packages-${d}')">${escapeHtml(label)}</li>`;
+            });
+        }
+        
+        // Project application section
+        if (projectDocs.length > 0) {
+            html += '<li class="docs-section-header">🚀 Project Application</li>';
+            projectDocs.forEach(d => {
+                const label = d.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                html += `<li class="docs-nav-item" id="nav-doc-project-${d}" onclick="loadDocContent('project-${d}')">${escapeHtml(label)}</li>`;
+            });
+        }
+        
+        listEl.innerHTML = html;
         
         if (docs.length > 0) {
             loadDocContent('index');
@@ -1489,10 +1525,20 @@ async function loadDocContent(name) {
                 const href = aEl.getAttribute('href');
                 if (href) {
                     if (href.endsWith('.md')) {
-                        // Internal document link
+                        // Internal document link - convert path to doc name
                         aEl.onclick = (e) => {
                             e.preventDefault();
-                            const docName = href.replace('.md', '');
+                            let docName = href.replace('.md', '');
+                            
+                            // Handle relative paths: packages/skills.md -> packages-skills
+                            if (docName.includes('/')) {
+                                docName = docName.split('/').join('-');
+                            }
+                            // Handle root-relative paths: ../packages/skills.md -> packages-skills
+                            if (docName.startsWith('..')) {
+                                docName = docName.replace(/\.\.\//g, '').split('/').join('-');
+                            }
+                            
                             loadDocContent(docName);
                         };
                     } else if (href.startsWith('http')) {
