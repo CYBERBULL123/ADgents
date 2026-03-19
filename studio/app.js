@@ -35,7 +35,6 @@ function navigate(page) {
         memory: ['Memory', "View and manage agents' memories"],
         skills: ['Skills', 'Tools available to your agents'],
         mcp: ['MCP Server', 'Model Context Protocol Integration'],
-        adk: ['ADK Integration', 'Agent Development Kit Adapter'],
         settings: ['Settings', 'Configure LLM providers and system'],
         docs: ['Documentation', 'Learn how to use ADgents']
     };
@@ -52,7 +51,6 @@ function navigate(page) {
     if (page === 'memory') populateMemorySelects();
     if (page === 'skills') renderSkillsPage();
     if (page === 'mcp') loadMCPPage();
-    if (page === 'adk') loadADKPage();
     if (page === 'settings') loadProviderStatus();
     if (page === 'builder') initBuilder();
     if (page === 'dashboard') updateDashboard();
@@ -1595,92 +1593,6 @@ function toggleMCPServer() {
         .catch(e => {
             toast('Failed to toggle MCP server: ' + e.message, 'error');
         });
-}
-
-// ─── ADK (Agent Development Kit) ───────────────────────────────────────────────
-
-async function loadADKPage() {
-    try {
-        // Load ADK status
-        const statusData = await api('/adk/status');
-        const statusDiv = document.getElementById('adk-status');
-        
-        if (statusData.success) {
-            statusDiv.innerHTML = `
-                <div style="margin-bottom: 1rem;"><strong>Status:</strong> <span class="badge ${statusData.total_agents > 0 ? 'badge-green' : 'badge-orange'}">${statusData.total_agents > 0 ? 'Ready' : 'No Agents'}</span></div>
-                <div style="margin-bottom: 1rem;"><strong>Available Agents:</strong> <strong style="color: var(--accent);">${statusData.total_agents}</strong></div>
-                <div style="margin-bottom: 1rem;"><strong>Framework:</strong> <span class="badge badge-blue">Google ADK</span></div>
-                <div><strong>Support Level:</strong> <span class="badge badge-blue">Full</span></div>
-            `;
-            
-            if (statusData.total_agents === 0) {
-                statusDiv.innerHTML += `<div style="margin-top: 1rem; padding: 0.75rem; background: var(--bg-input); border-radius: 6px; color: var(--text-secondary); font-size: 0.85rem;">No agents available. <a href="javascript:navigate('agents')" style="color: var(--accent);">Create an agent first</a></div>`;
-            }
-        } else {
-            statusDiv.innerHTML = `<div class="badge badge-red">Error: ${statusData.error || 'Failed to load'}</div>`;
-        }
-        
-        // Load available agents for selection
-        const agentsDiv = document.getElementById('adk-agents-list');
-        const selectDiv = document.getElementById('adk-test-agent');
-        
-        if (statusData.success && statusData.agents && statusData.agents.length > 0) {
-            agentsDiv.innerHTML = statusData.agents.map(agent => `
-                <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.75rem;">
-                    <div style="font-weight: 600; color: var(--accent);">${escapeHtml(agent.name)}</div>
-                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.3rem;">Role: ${escapeHtml(agent.role || 'Agent')}</div>
-                </div>
-            `).join('');
-            
-            selectDiv.innerHTML = '<option value="">Choose an agent...</option>' + statusData.agents.map(agent => 
-                `<option value="${escapeHtml(agent.id)}">${escapeHtml(agent.name)}</option>`
-            ).join('');
-        } else {
-            agentsDiv.innerHTML = '<div style="padding: 1rem; text-align: center; color: var(--text-secondary);">➕ <a href="javascript:navigate(\'agents\')" style="color: var(--accent);">Create an agent</a> to get started with ADK</div>';
-            selectDiv.innerHTML = '<option value="">No agents available</option>';
-        }
-    } catch (e) {
-        const statusDiv = document.getElementById('adk-status');
-        statusDiv.innerHTML = `<div class="badge badge-red">Error: ${e.message}</div>`;
-        document.getElementById('adk-agents-list').innerHTML = `<div style="color: var(--text-secondary);">Failed to load agents</div>`;
-    }
-}
-
-async function runADKTest() {
-    const agentId = document.getElementById('adk-test-agent').value;
-    const prompt = document.getElementById('adk-test-prompt').value;
-    
-    if (!agentId) {
-        toast('Please select an agent', 'warning');
-        return;
-    }
-    
-    if (!prompt.trim()) {
-        toast('Please enter a prompt', 'warning');
-        return;
-    }
-    
-    const resultDiv = document.getElementById('adk-test-result');
-    const outputDiv = document.getElementById('adk-test-output');
-    
-    resultDiv.style.display = 'none';
-    outputDiv.textContent = 'Running...';
-    
-    try {
-        const response = await api('/adk/run-agent', 'POST', { agent_id: agentId, prompt });
-        
-        if (response.success) {
-            outputDiv.textContent = response.response.text;
-            resultDiv.style.display = 'block';
-            toast('ADK test completed successfully');
-        } else {
-            throw new Error(response.error || 'Unknown error');
-        }
-    } catch (e) {
-        outputDiv.textContent = 'Error: ' + e.message;
-        resultDiv.style.display = 'block';
-        toast('ADK test failed: ' + e.message, 'error');
-    }
 }
 
 window.addEventListener('DOMContentLoaded', init);

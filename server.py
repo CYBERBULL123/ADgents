@@ -77,13 +77,6 @@ class MCPConfigRequest(BaseModel):
     mode: Optional[str] = "stdio"
     port: Optional[int] = 8001
 
-class ADKWrapRequest(BaseModel):
-    agent_id: str
-
-class ADKRunRequest(BaseModel):
-    agent_id: str
-    prompt: str
-
 # ─── Crew Management Models ───────────────────────────────────────────────────
 
 class CreateTemplateRequest(BaseModel):
@@ -769,88 +762,6 @@ async def mcp_stop():
 
 
 
-# ─── ADK (Agent Development Kit) ───────────────────────────────────────────────
-
-@app.get("/api/adk/status")
-async def adk_status():
-    """Get ADK adapter status and available agents."""
-    try:
-        agents_list = []
-        for agent_id, agent in agents.items():
-            if agent.persona:
-                agents_list.append({
-                    "id": agent_id,
-                    "name": agent.persona.name,
-                    "type": "ADKAgent",
-                    "role": agent.persona.role if hasattr(agent.persona, 'role') else 'Agent'
-                })
-        
-        return {
-            "success": True,
-            "enabled": len(agents_list) > 0,
-            "total_agents": len(agents_list),
-            "agents": agents_list,
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e), "enabled": False, "agents": [], "total_agents": 0}
-
-@app.post("/api/adk/wrap-agent")
-async def adk_wrap_agent(request: ADKWrapRequest):
-    """Wrap an ADgents agent in ADK-compatible interface."""
-    try:
-        from core.adk_adapter import ADKAgent
-        
-        agent_id = request.agent_id
-        agent = agents.get(agent_id)
-        
-        if not agent:
-            raise ValueError(f"Agent {agent_id} not found")
-        
-        adk_agent = ADKAgent(agent)
-        
-        return {
-            "success": True,
-            "message": f"Agent {agent_id} wrapped successfully",
-            "adk_agent": {
-                "agent_id": agent_id,
-                "adk_compatible": True,
-                "methods": ["generate_content", "run_async"],
-            }
-        }
-    except ImportError as e:
-        return {"success": False, "error": f"Import error: {str(e)}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/adk/run-agent")
-async def adk_run_agent(request: ADKRunRequest):
-    """Run an ADgents agent with ADK-compatible prompt."""
-    try:
-        from core.adk_adapter import ADKAgent
-        
-        agent_id = request.agent_id
-        prompt = request.prompt
-        
-        agent = agents.get(agent_id)
-        if not agent:
-            raise ValueError(f"Agent {agent_id} not found")
-        
-        adk_agent = ADKAgent(agent)
-        response = adk_agent.generate_content(prompt)
-        
-        return {
-            "success": True,
-            "response": {
-                "text": response.text,
-                "role": response.role,
-            }
-        }
-    except ImportError as e:
-        return {"success": False, "error": f"Import error: {str(e)}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
 # ─── LangChain Integration ────────────────────────────────────────────────────
 
 _langchain_agents = {}  # Store LangChain adapters
@@ -918,236 +829,6 @@ async def langchain_list_agents():
         "total": len(agents_list)
     }
 
-
-# ─── Google ADK Integration ──────────────────────────────────────────────────
-
-_adk_integration = None  # Global ADK Integration instance
-
-def get_adk():
-    """Initialize or get ADK Integration instance."""
-    global _adk_integration
-    if not _adk_integration:
-        try:
-            from core.google_adk_integration import ADKIntegration
-            _adk_integration = ADKIntegration()
-        except Exception as e:
-            logger.warning(f"Google ADK not available: {e}")
-    return _adk_integration
-
-@app.get("/api/google-adk/status")
-async def google_adk_status():
-    """Get Google ADK integration status and available agents."""
-    adk = get_adk()
-    if not adk:
-        return {
-            "success": False,
-            "available": False,
-            "google_adk_installed": False,
-            "message": "Google ADK not initialized. Install with: pip install google-adk"
-        }
-    
-    return {
-        "success": True,
-        "available": adk.adk_available,
-        "google_adk_installed": adk.adk_available,
-        "agents": adk.list_agents() if adk.adk_available else [],
-        "deployment_config": adk.get_deployment_config() if adk.adk_available else {},
-        "message": "Running with real Google ADK" if adk.adk_available else "Running in degraded mode - install google-adk for full functionality"
-    }
-
-@app.post("/api/google-adk/create-agent")
-async def google_adk_create_agent(request: CreateAgentRequest):
-    """Create an LLM Agent using Google ADK."""
-    try:
-        adk = get_adk()
-        if not adk:
-            return {
-                "success": False,
-                "error": "Google ADK not initialized",
-                "hint": "Install python package: pip install google-adk"
-            }
-        
-        if not adk.adk_available:
-            return {
-                "success": False,
-                "error": "Google ADK library not available - agent created in degraded mode",
-                "hint": "Install python package: pip install google-adk",
-                "status": "degraded"
-            }
-        
-        agent_id = request.name.lower().replace(" ", "_")
-        
-        # Create ADK agent
-        agent = adk.create_llm_agent(
-            name=agent_id,
-            description=request.name,
-            model="gemini-2.0-flash"
-        )
-        
-        agent_info = agent.get_agent_info()
-        
-        return {
-            "success": agent_info.get("status") == "initialized",
-            "agent_id": agent_id,
-            "agent_info": agent_info,
-            "message": f"ADK agent {'created successfully' if agent_info.get('status') == 'initialized' else 'created in degraded mode'}: {agent_id}"
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "hint": "Ensure GOOGLE_API_KEY is set and google-adk is installed"
-        }
-
-@app.post("/api/google-adk/create-sequential-workflow")
-async def google_adk_create_sequential(request: Dict):
-    """Create a Sequential Workflow Agent."""
-    try:
-        adk = get_adk()
-        if not adk:
-            raise ValueError("Google ADK not initialized")
-        
-        name = request.get("name", "sequential_workflow")
-        agents_sequence = request.get("agents", [])
-        
-        workflow = adk.create_sequential_workflow(name, agents_sequence)
-        
-        return {
-            "success": True,
-            "workflow": workflow,
-            "message": "Sequential workflow created"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/google-adk/create-parallel-workflow")
-async def google_adk_create_parallel(request: Dict):
-    """Create a Parallel Workflow Agent."""
-    try:
-        adk = get_adk()
-        if not adk:
-            raise ValueError("Google ADK not initialized")
-        
-        name = request.get("name", "parallel_workflow")
-        agents_list = request.get("agents", [])
-        
-        workflow = adk.create_parallel_workflow(name, agents_list)
-        
-        return {
-            "success": True,
-            "workflow": workflow,
-            "message": "Parallel workflow created"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/google-adk/create-multi-agent-system")
-async def google_adk_create_multi_agent(request: Dict):
-    """Create a Multi-Agent System with ADK."""
-    try:
-        adk = get_adk()
-        if not adk:
-            raise ValueError("Google ADK not initialized")
-        
-        name = request.get("name", "multi_agent_system")
-        agent_names = request.get("agents", [])
-        
-        # Get agents from ADK
-        agents_dict = {
-            agent_name: adk.get_agent(agent_name) 
-            for agent_name in agent_names
-            if adk.get_agent(agent_name)
-        }
-        
-        if not agents_dict:
-            raise ValueError("No valid agents provided for multi-agent system")
-        
-        system = adk.create_multi_agent_system(name, agents_dict)
-        
-        return {
-            "success": True,
-            "system": system,
-            "message": "Multi-agent system created"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.get("/api/google-adk/agents")
-async def google_adk_list_agents():
-    """List all ADK agents."""
-    try:
-        adk = get_adk()
-        if not adk:
-            return {"success": False, "agents": [], "message": "Google ADK not available"}
-        
-        agents_list = adk.list_agents()
-        return {
-            "success": True,
-            "agents": agents_list,
-            "total": len(agents_list)
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/google-adk/run-agent")
-async def google_adk_run_agent(request: ChatRequest):
-    """Run an ADK agent."""
-    try:
-        adk = get_adk()
-        if not adk:
-            raise ValueError("Google ADK not initialized")
-        
-        result = await adk.run_agent(request.agent_id, request.message)
-        return result
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/google-adk/register-tool")
-async def google_adk_register_tool(request: Dict):
-    """Register a skill as a tool with an ADK agent."""
-    try:
-        adk = get_adk()
-        if not adk:
-            raise ValueError("Google ADK not initialized")
-        
-        agent_name = request.get("agent_name")
-        skill_name = request.get("skill_name")
-        
-        if not agent_name or not skill_name:
-            raise ValueError("agent_name and skill_name required")
-        
-        skill = SKILL_REGISTRY.get(skill_name)
-        if not skill:
-            raise ValueError(f"Skill {skill_name} not found")
-        
-        # Convert skill to tool
-        tool = adk.convert_adgent_skill_to_tool(skill)
-        
-        # Register with agent
-        success = adk.register_tool(agent_name, tool, skill.description)
-        
-        return {
-            "success": success,
-            "message": f"Tool {skill_name} registered with agent {agent_name}" if success else "Failed to register tool"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.get("/api/google-adk/deployment-config")
-async def google_adk_deployment_config():
-    """Get deployment configuration for Vertex AI."""
-    try:
-        adk = get_adk()
-        if not adk:
-            return {"success": False, "message": "Google ADK not initialized"}
-        
-        config = adk.get_deployment_config()
-        return {
-            "success": True,
-            "deployment_config": config
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
 
 
@@ -1410,6 +1091,55 @@ async def delete_crew(crew_id: str):
         return {"success": False, "error": "Crew not found"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+@app.post("/api/crews/{crew_id}/execute")
+async def execute_crew_task(crew_id: str, req: TaskRequest):
+    """Execute a task autonomously using a crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        crew = crew_mgr.get_crew(crew_id)
+        
+        if not crew:
+            raise HTTPException(404, f"Crew {crew_id} not found")
+        
+        # Get crew members
+        crew_agents = []
+        for member in crew.get('members', []):
+            agent_id = member.get('agent_id')
+            if agent_id and agent_id in agents:
+                crew_agents.append(agents[agent_id])
+        
+        if not crew_agents:
+            raise ValueError("No valid agents in crew")
+        
+        # Execute task with primary agent (coordinator)
+        primary_agent = crew_agents[0]
+        
+        # Add context about other team members
+        team_context = f"\n\nYou are part of a crew with these team members:\n"
+        for member in crew.get('members', []):
+            team_context += f"- {member.get('agent_name', 'Agent')} (Role: {member.get('role', 'contributor')})\n"
+        
+        task_with_context = f"{req.task}{team_context}"
+        
+        # Run the task
+        result = await primary_agent.run_task(task_with_context, max_iterations=req.max_iterations)
+        
+        return {
+            "success": True,
+            "crew_id": crew_id,
+            "task": req.task,
+            "agents_involved": len(crew_agents),
+            "agent_names": [m.get('agent_name', 'Agent') for m in crew.get('members', [])],
+            "output": result if isinstance(result, str) else str(result),
+            "message": "Task executed autonomously"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Failed to execute crew task"
+        }
 
 
 # ─── Organizations ────────────────────────────────────────────────────────────

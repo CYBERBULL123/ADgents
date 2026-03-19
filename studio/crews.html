@@ -5,6 +5,120 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Crew Manager - ADgents</title>
     <link rel="stylesheet" href="style.css">
+    <style>
+        /* Responsive Tabs */
+        @media (max-width: 768px) {
+            .tabs-container {
+                display: flex;
+                gap: 0;
+                margin-bottom: 2rem;
+                border-bottom: 1px solid var(--border);
+                padding-bottom: 0;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            .tab-btn {
+                padding: 1rem 0.75rem !important;
+                font-size: 0.85rem !important;
+                white-space: nowrap;
+                flex-shrink: 0;
+            }
+        }
+        
+        .tabs-container {
+            display: flex;
+            gap: 2.5rem;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0;
+        }
+        
+        /* Responsive Grid */
+        @media (max-width: 768px) {
+            .crew-grid {
+                grid-template-columns: 1fr !important;
+            }
+            .crew-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 1rem;
+            }
+            .crew-header .btn-group {
+                width: 100%;
+            }
+            .crew-header .btn-group .btn {
+                flex: 1;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content {
+                padding: 1rem;
+            }
+            .page-container {
+                padding: 1rem;
+            }
+            .card {
+                margin: 0;
+            }
+            .modal {
+                margin: 1rem;
+                max-width: calc(100% - 2rem) !important;
+            }
+            .form-grid {
+                grid-template-columns: 1fr !important;
+            }
+            h2 {
+                font-size: 1.1rem !important;
+            }
+            .topbar {
+                padding: 1rem !important;
+                flex-direction: column;
+            }
+            .topbar-left {
+                width: 100%;
+            }
+        }
+        
+        .crew-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .crew-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 0.4rem 0.8rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            background: var(--bg-input);
+            color: var(--text-secondary);
+        }
+        
+        .badge-success {
+            background: rgba(16, 185, 129, 0.1);
+            color: #10b981;
+        }
+        
+        @media (max-width: 768px) {
+            .crew-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
 </head>
 <body>
     <main class="main-content">
@@ -18,42 +132,103 @@
         <div class="page-container">
             <section class="page active" id="page-crews">
                 <!-- Tabs -->
-                <div style="display: flex; gap: 2.5rem; margin-bottom: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0;">
+                <div class="tabs-container">
                     <button class="tab-btn active" data-tab="crews" onclick="switchTab('crews');" style="border: none; background: none; color: var(--text-secondary); cursor: pointer; padding: 1rem 0; font-size: 0.95rem; transition: all 0.3s; border-bottom: 3px solid transparent; font-weight: 500;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="if(!this.classList.contains('active')) this.style.color='var(--text-secondary)'">Active Crews</button>
-                    <button class="tab-btn" data-tab="templates" onclick="switchTab('templates');" style="border: none; background: none; color: var(--text-secondary); cursor: pointer; padding: 1rem 0; font-size: 0.95rem; transition: all 0.3s; border-bottom: 3px solid transparent; font-weight: 500;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="if(!this.classList.contains('active')) this.style.color='var(--text-secondary)'">Agent Templates</button>
+                    <button class="tab-btn" data-tab="crew-tasks" onclick="switchTab('crew-tasks');" style="border: none; background: none; color: var(--text-secondary); cursor: pointer; padding: 1rem 0; font-size: 0.95rem; transition: all 0.3s; border-bottom: 3px solid transparent; font-weight: 500;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="if(!this.classList.contains('active')) this.style.color='var(--text-secondary)'">⚡ Run Crew Tasks</button>
+                    <button class="tab-btn" data-tab="templates" onclick="switchTab('templates');" style="border: none; background: none; color: var(--text-secondary); cursor: pointer; padding: 1rem 0; font-size: 0.95rem; transition: all 0.3s; border-bottom: 3px solid transparent; font-weight: 500;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="if(!this.classList.contains('active')) this.style.color='var(--text-secondary)'" >Agent Templates</button>
                     <button class="tab-btn" data-tab="organizations" onclick="switchTab('organizations');" style="border: none; background: none; color: var(--text-secondary); cursor: pointer; padding: 1rem 0; font-size: 0.95rem; transition: all 0.3s; border-bottom: 3px solid transparent; font-weight: 500;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="if(!this.classList.contains('active')) this.style.color='var(--text-secondary)'">Organizations</button>
                     <button class="tab-btn" data-tab="communications" onclick="switchTab('communications');" style="border: none; background: none; color: var(--text-secondary); cursor: pointer; padding: 1rem 0; font-size: 0.95rem; transition: all 0.3s; border-bottom: 3px solid transparent; font-weight: 500;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="if(!this.classList.contains('active')) this.style.color='var(--text-secondary)'">A2A Communications</button>
                 </div>
 
                 <!-- Tab Content: Crews -->
                 <div id="tab-crews" class="tab-content active" style="display: block;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem;">
                         <h2 style="margin: 0; font-size: 1.3rem;">Active Crews</h2>
                         <button class="btn btn-primary" onclick="showCreateCrewModal()">+ Create Crew</button>
                     </div>
-                    <div id="crews-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 1.5rem;">
+                    <div id="crews-list" class="crew-grid">
                         <p style="color: var(--text-secondary);">Loading crews...</p>
+                    </div>
+                </div>
+
+                <!-- Tab Content: Crew Tasks (Autonomous Execution) -->
+                <div id="tab-crew-tasks" class="tab-content" style="display: none;">
+                    <div style="margin-bottom: 2rem;">
+                        <h2 style="margin: 0 0 1rem 0; font-size: 1.3rem;">⚡ Run Crew Tasks Autonomously</h2>
+                        <div style="background: var(--bg-input); border-left: 3px solid var(--accent); padding: 1rem; border-radius: 6px; color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1.5rem;">
+                            <strong style="color: var(--text-primary);">How It Works:</strong><br/>
+                            <span style="display: inline-block; margin: 0.5rem 0;">1️⃣ Select a crew → 2️⃣ Enter task → 3️⃣ Agents work autonomously → 4️⃣ Get results</span>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header"><h3 style="margin: 0;">Create & Execute Crew Task</h3></div>
+                        <div style="padding: 1.5rem;">
+                            <div class="form-group">
+                                <label>Select Crew *</label>
+                                <select id="task-crew-select" class="form-control" onchange="loadCrewInfo()">
+                                    <option value="">Choose a crew...</option>
+                                </select>
+                            </div>
+
+                            <div id="crew-info-display" style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; margin-bottom: 1rem; display: none;">
+                                <div style="font-size: 0.85rem;">
+                                    <div style="margin-bottom: 0.5rem;"><strong>Team Members:</strong></div>
+                                    <div id="crew-members-display" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Task Description *</label>
+                                <textarea id="task-description" class="form-control" rows="4" placeholder="Example: Create a comprehensive marketing strategy for Q1 2026..." style="font-family: inherit;"></textarea>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Max Iterations (Auto-stop after)</label>
+                                <input type="number" class="form-control" id="task-max-iterations" value="5" min="1" max="20" />
+                            </div>
+
+                            <div style="display: flex; gap: 1rem; margin-top: 1.5rem; flex-wrap: wrap;">
+                                <button class="btn btn-primary" onclick="runCrewTask()" style="flex: 1; min-width: 200px;">⚡ Execute Task Autonomously</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="task-results" style="margin-top: 2rem; display: none;">
+                        <h3 style="margin: 0 0 1rem 0;">Task Results</h3>
+                        <div class="card">
+                            <div style="padding: 1rem;">
+                                <div id="task-result-content"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="task-history-display" style="margin-top: 2rem;">
+                        <h3 style="margin: 0 0 1rem 0;">Recent Crew Tasks</h3>
+                        <div id="task-history" style="display: flex; flex-direction: column; gap: 1rem;">
+                            <p style="color: var(--text-secondary);">No tasks executed yet</p>
+                        </div>
                     </div>
                 </div>
 
                 <!-- Tab Content: Templates -->
                 <div id="tab-templates" class="tab-content" style="display: none;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem;">
                         <h2 style="margin: 0; font-size: 1.3rem;">Agent Templates</h2>
                         <button class="btn btn-primary" onclick="showCreateTemplateModal()">+ Create Template</button>
                     </div>
-                    <div id="templates-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 1.5rem;">
+                    <div id="templates-list" class="crew-grid">
                         <p style="color: var(--text-secondary);">Loading templates...</p>
                     </div>
                 </div>
 
                 <!-- Tab Content: Organizations -->
                 <div id="tab-organizations" class="tab-content" style="display: none;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem;">
                         <h2 style="margin: 0; font-size: 1.3rem;">Organizations</h2>
                         <button class="btn btn-primary" onclick="showCreateOrgModal()">+ Create Organization</button>
                     </div>
-                    <div id="organizations-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 1.5rem;">
+                    <div id="organizations-list" class="crew-grid">
                         <p style="color: var(--text-secondary);">Loading organizations...</p>
                     </div>
                 </div>
@@ -234,6 +409,7 @@
             document.querySelector(`[data-tab="${tabName}"]`).style.color = 'var(--accent)';
 
             if (tabName === 'crews') loadCrews();
+            else if (tabName === 'crew-tasks') loadCrewsForTasks();
             else if (tabName === 'templates') loadTemplates();
             else if (tabName === 'organizations') loadOrganizations();
             else if (tabName === 'communications') loadCrewsForComm();
@@ -243,33 +419,40 @@
             try {
                 const res = await fetch(`${API_BASE}/crews`);
                 const data = await res.json();
-                if (data.success) renderCrews(data.crews);
-            } catch (error) { console.error('Error:', error); }
+                if (data.success) {
+                    renderCrews(data.crews);
+                } else {
+                    renderCrews([]);
+                }
+            } catch (error) { 
+                console.error('Error:', error);
+                renderCrews([]);
+            }
         }
 
         function renderCrews(crews) {
             const container = document.getElementById('crews-list');
             if (crews.length === 0) {
-                container.innerHTML = '<p style="color: var(--text-secondary);">No crews yet.</p>';
+                container.innerHTML = '<p style="color: var(--text-secondary); grid-column: 1/-1; text-align: center; padding: 2rem;">📭 No crews created yet. <button class="btn btn-primary" onclick="showCreateCrewModal()" style="margin-left: 1rem;">+ Create your first crew</button></p>';
                 return;
             }
             container.innerHTML = crews.map(crew => `
                 <div class="card">
-                    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div class="crew-header">
                         <h3 style="margin: 0;">${crew.name}</h3>
-                        <div style="display: flex; gap: 0.3rem;">
+                        <div class="btn-group">
                             <button class="btn btn-ghost btn-xs" onclick="editCrew('${crew.id}')" title="Edit crew">✏️</button>
                             <button class="btn btn-danger btn-xs" onclick="deleteCrew('${crew.id}')" title="Delete crew">🗑️</button>
                         </div>
                     </div>
-                    <div style="padding: 1rem 0 0;">
-                        <p style="color: var(--text-secondary); font-size: 0.9rem; margin: 0 0 1rem;">${crew.description || ''}</p>
+                    <div style="padding: 1rem;">
+                        <p style="color: var(--text-secondary); font-size: 0.9rem; margin: 0 0 1rem;">${crew.description || 'No description'}</p>
                         <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
                             ${crew.members.map(m => `<span style="background: var(--accent-light); color: var(--accent); padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.85rem; display: inline-block;"><span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: ${m.status === 'active' ? '#10b981' : '#6b7280'}; margin-right: 0.4rem;"></span>${m.agent_name}</span>`).join('')}
                         </div>
-                        <div style="display: flex; gap: 0.5rem; font-size: 0.85rem;">
-                            <span style="background: var(--bg-input); padding: 0.3rem 0.8rem; border-radius: 6px; color: var(--text-secondary);">${crew.members.length} members</span>
-                            <span style="background: var(--bg-input); padding: 0.3rem 0.8rem; border-radius: 6px; color: var(--text-secondary);">${crew.communication_protocol}</span>
+                        <div style="display: flex; gap: 0.5rem; font-size: 0.85rem; flex-wrap: wrap;">
+                            <span class="badge">${crew.members.length} members</span>
+                            <span class="badge">${crew.communication_protocol || 'a2a'}</span>
                         </div>
                     </div>
                 </div>
@@ -342,21 +525,30 @@
             try {
                 const res = await fetch(`${API_BASE}/organizations`);
                 const data = await res.json();
-                if (data.success) renderOrganizations(data.organizations);
-            } catch (error) { console.error('Error:', error); }
+                if (data.success) {
+                    renderOrganizations(data.organizations);
+                } else {
+                    renderOrganizations([]);
+                }
+            } catch (error) { 
+                console.error('Error:', error);
+                renderOrganizations([]);
+            }
         }
 
         function renderOrganizations(orgs) {
             const container = document.getElementById('organizations-list');
             if (orgs.length === 0) {
-                container.innerHTML = '<p style="color: var(--text-secondary);">No organizations.</p>';
+                container.innerHTML = '<p style="color: var(--text-secondary); grid-column: 1/-1; text-align: center; padding: 2rem;">📭 No organizations created yet. <button class="btn btn-primary" onclick="showCreateOrgModal()" style="margin-left: 1rem;">+ Create your first organization</button></p>';
                 return;
             }
             container.innerHTML = orgs.map(org => `
-                <div class="card" style="cursor: pointer;" onclick="showOrgDetails('${org.id}')">
-                    <div class="card-header"><h3 style="margin: 0;">${org.name}</h3></div>
-                    <div style="padding: 1rem 0 0;">
-                        <p style="color: var(--text-secondary); margin: 0 0 0.8rem;">${org.description || ''}</p>
+                <div class="card" style="cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'" onclick="showOrgDetails('${org.id}')">
+                    <div class="crew-header">
+                        <h3 style="margin: 0;">${org.name}</h3>
+                    </div>
+                    <div style="padding: 1rem;">
+                        <p style="color: var(--text-secondary); margin: 0 0 0.8rem; font-size: 0.9rem;">${org.description || 'No description'}</p>
                         <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Created: ${new Date(org.created_at).toLocaleDateString()}</p>
                     </div>
                 </div>
@@ -408,11 +600,18 @@
             try {
                 const res = await fetch(`${API_BASE}/organizations`);
                 const data = await res.json();
-                if (data.success && data.organizations.length > 0) {
+                if (data.success && data.organizations && data.organizations.length > 0) {
                     const select = document.getElementById('crew-org');
                     select.innerHTML = data.organizations.map(org => `<option value="${org.id}">${org.name}</option>`).join('');
+                } else {
+                    const select = document.getElementById('crew-org');
+                    select.innerHTML = '<option value="default">Default Organization</option>';
                 }
-            } catch (error) { console.error('Error:', error); }
+            } catch (error) { 
+                console.error('Error:', error);
+                const select = document.getElementById('crew-org');
+                select.innerHTML = '<option value="default">Default Organization</option>';
+            }
         }
 
         async function createCrew(event) {
@@ -478,20 +677,30 @@
         async function createOrganization(event) {
             event.preventDefault();
             try {
-                const res = await fetch(`${API_BASE}/organizations/create?name=${encodeURIComponent(document.getElementById('org-name').value)}&description=${encodeURIComponent(document.getElementById('org-desc').value)}`);
-                if ((await res.json()).success) {
+                const res = await fetch(`${API_BASE}/organizations/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: `name=${encodeURIComponent(document.getElementById('org-name').value)}&description=${encodeURIComponent(document.getElementById('org-desc').value)}`
+                });
+                const data = await res.json();
+                if (data.success) {
                     alert('Organization created!');
                     closeModal('createOrgModal');
                     loadOrganizations();
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to create organization'));
                 }
-            } catch (error) { console.error('Error:', error); }
+            } catch (error) { 
+                console.error('Error:', error);
+                alert('Failed to create organization: ' + error.message);
+            }
         }
 
         async function loadCrewsForComm() {
             try {
                 const res = await fetch(`${API_BASE}/crews`);
                 const data = await res.json();
-                if (data.success) {
+                if (data.success && data.crews && data.crews.length > 0) {
                     const select = document.getElementById('comm-crew-select');
                     select.innerHTML = '<option value="">-- Select a crew --</option>' + data.crews.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
                 }
@@ -523,6 +732,115 @@
 
         function closeModal(id) {
             document.getElementById(id).style.display = 'none';
+        }
+
+        /* ─── Crew Task Execution ─────────────────────────────────────────── */
+        async function loadCrewsForTasks() {
+            try {
+                const res = await fetch(`${API_BASE}/crews`);
+                const data = await res.json();
+                if (data.success && data.crews && data.crews.length > 0) {
+                    const select = document.getElementById('task-crew-select');
+                    select.innerHTML = '<option value="">Choose a crew...</option>' + 
+                        data.crews.map(c => `<option value="${c.id}" data-crew='${JSON.stringify(c)}'>${c.name}</option>`).join('');
+                } else {
+                    const select = document.getElementById('task-crew-select');
+                    select.innerHTML = '<option value="">No crews available - create one first</option>';
+                }
+            } catch (error) { 
+                console.error('Error:', error);
+                const select = document.getElementById('task-crew-select');
+                select.innerHTML = '<option value="">Error loading crews</option>';
+            }
+        }
+
+        function loadCrewInfo() {
+            const select = document.getElementById('task-crew-select');
+            const selectedOption = select.options[select.selectedIndex];
+            const display = document.getElementById('crew-info-display');
+            
+            if (select.value) {
+                try {
+                    const crew = JSON.parse(selectedOption.dataset.crew);
+                    const membersHtml = crew.members.map(m => 
+                        `<span style="background: var(--accent-light); color: var(--accent); padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.8rem;">👤 ${m.agent_name}</span>`
+                    ).join('');
+                    document.getElementById('crew-members-display').innerHTML = membersHtml;
+                    display.style.display = 'block';
+                } catch (e) {
+                    console.error('Error parsing crew:', e);
+                }
+            } else {
+                display.style.display = 'none';
+            }
+        }
+
+        async function runCrewTask() {
+            const crewId = document.getElementById('task-crew-select').value;
+            const task = document.getElementById('task-description').value.trim();
+            const maxIterations = parseInt(document.getElementById('task-max-iterations').value) || 5;
+
+            if (!crewId) {
+                alert('Please select a crew');
+                return;
+            }
+            if (!task) {
+                alert('Please enter a task description');
+                return;
+            }
+
+            document.getElementById('task-results').style.display = 'block';
+            document.getElementById('task-result-content').innerHTML = '<p style="color: var(--text-secondary); text-align: center;">⏳ Executing crew task autonomously...</p>';
+
+            try {
+                const res = await fetch(`${API_BASE}/crews/${crewId}/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        task: task,
+                        max_iterations: maxIterations
+                    })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    const results = data.result || {};
+                    document.getElementById('task-result-content').innerHTML = `
+                        <div style="margin-bottom: 1rem;">
+                            <div style="display: flex; gap: 1rem; margin-bottom: 1rem;">
+                                <div style="background: var(--accent); color: white; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.85rem;">
+                                    ✅ Task Completed
+                                </div>
+                                <div style="background: var(--accent-2); color: white; padding: 0.5rem 1rem; border-radius: 6px; font-size: 0.85rem;">
+                                    ✓ ${results.agents_involved || 'Multiple'} agents participated
+                                </div>
+                            </div>
+                        </div>
+                        <div style="background: var(--bg-input); padding: 1rem; border-radius: 6px; border-left: 3px solid var(--accent); margin-bottom: 1rem;">
+                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;"><strong>Task:</strong></div>
+                            <div style="color: var(--text-primary);">${task}</div>
+                        </div>
+                        <div style="background: var(--bg-card); padding: 1rem; border-radius: 6px; border: 1px solid var(--border);">
+                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;"><strong>Result:</strong></div>
+                            <div style="color: var(--text-primary); white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: 0.9rem; max-height: 300px; overflow-y: auto;">
+                                ${results.output || results.message || 'Task executed successfully'}
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    document.getElementById('task-result-content').innerHTML = `
+                        <div style="color: var(--text-secondary);">
+                            ❌ Error: ${data.error || 'Failed to execute task'}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                document.getElementById('task-result-content').innerHTML = `
+                    <div style="color: var(--text-secondary);">
+                        ❌ Error: ${error.message}
+                    </div>
+                `;
+            }
         }
 
         loadCrews();
