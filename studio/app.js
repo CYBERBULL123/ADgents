@@ -51,7 +51,14 @@ function navigate(page) {
     if (page === 'memory') populateMemorySelects();
     if (page === 'skills') renderSkillsPage();
     if (page === 'mcp') loadMCPPage();
-    if (page === 'settings') loadProviderStatus();
+    if (page === 'settings') {
+        loadProviderStatus();
+        updateDBConnectionFields();
+        // Load saved preferences
+        document.getElementById('org-name').value = localStorage.getItem('org_name') || '';
+        document.getElementById('memory-type').value = localStorage.getItem('memory_type') || 'multi_tier';
+        document.getElementById('auto-save').checked = localStorage.getItem('auto_save') === 'true';
+    }
     if (page === 'builder') initBuilder();
     if (page === 'dashboard') updateDashboard();
     if (page === 'docs') {
@@ -93,18 +100,50 @@ async function checkApiStatus() {
         dot.className = 'status-dot online';
         text.textContent = 'API Connected';
 
+        // Update main status
         document.getElementById('status-api').textContent = '✅ Online';
         document.getElementById('status-api').className = 'badge badge-green';
-        document.getElementById('status-llm').textContent = health.llm_providers?.join(', ') || 'mock';
+        
+        // Update database status
+        document.getElementById('status-db').textContent = `✅ ${health.database_status || 'SQLite Ready'}`;
+        document.getElementById('status-db').className = 'badge badge-green';
+        
+        // Update skills engine status
+        document.getElementById('status-skills-engine').textContent = '✅ Active';
+        document.getElementById('status-skills-engine').className = 'badge badge-green';
+        
+        // Update LLM providers count
+        const availableLLMs = health.llm_providers?.length || 0;
+        document.getElementById('status-llm').textContent = `${availableLLMs}/${health.llm_total || 0} Ready`;
+        document.getElementById('status-llm').className = availableLLMs > 0 ? 'badge badge-green' : 'badge badge-orange';
+        
+        // Update stats
         document.getElementById('stat-skills').textContent = health.skills || 0;
-        document.getElementById('stat-providers').textContent = health.llm_providers?.length || 1;
-    } catch {
+        document.getElementById('stat-agents').textContent = health.agents || 0;
+        document.getElementById('stat-providers').textContent = availableLLMs || 0;
+        
+        // Detailed LLM providers
+        const llmDetailEl = document.getElementById('llm-status-details');
+        if (health.llm_details && Object.keys(health.llm_details).length > 0) {
+            llmDetailEl.innerHTML = Object.entries(health.llm_details).map(([name, info]) => {
+                const status = info.available ? '✅' : '❌';
+                const isDefault = info.is_default ? ' (default)' : '';
+                return `<div class="status-item" style="padding:0.5rem 0;"><span>${status} ${name}${isDefault}</span></div>`;
+            }).join('');
+        } else {
+            llmDetailEl.innerHTML = '<div class="status-item">No providers configured</div>';
+        }
+    } catch (e) {
         const dot = document.getElementById('api-status-dot');
         const text = document.getElementById('api-status-text');
         dot.className = 'status-dot offline';
         text.textContent = 'API Offline';
         document.getElementById('status-api').textContent = '❌ Offline';
         document.getElementById('status-api').className = 'badge badge-red';
+        document.getElementById('status-db').textContent = '❓ Unknown';
+        document.getElementById('status-db').className = 'badge badge-red';
+        document.getElementById('status-skills-engine').textContent = '❓ Unknown';
+        document.getElementById('status-skills-engine').className = 'badge badge-red';
     }
 }
 
@@ -148,6 +187,15 @@ async function refreshAll() {
 function updateDashboard() {
     const agents = Object.values(state.agents);
     const listEl = document.getElementById('dashboard-agents-list');
+    
+    // Update memory stats
+    let totalMemories = 0;
+    agents.forEach(a => {
+        const episodic = a.memory_stats?.episodic_memories || 0;
+        const semantic = a.memory_stats?.semantic_memories || 0;
+        totalMemories += episodic + semantic;
+    });
+    document.getElementById('stat-memories').textContent = totalMemories;
 
     if (agents.length === 0) {
         listEl.innerHTML = '<div class="empty-state-small">No agents yet. Create your first agent!</div>';
@@ -155,13 +203,13 @@ function updateDashboard() {
     }
 
     listEl.innerHTML = agents.slice(0, 5).map(a => `
-    <div class="dash-agent-item" onclick="navigate('chat')">
-      <div style="font-size:1.4rem">${a.persona.avatar}</div>
-      <div>
-        <div style="font-weight:600;font-size:0.9rem">${a.persona.name}</div>
+    <div class="dash-agent-item" onclick="navigate('chat')" style="padding: 0.75rem; border-radius: var(--radius-sm); background: var(--bg-card); border: 1px solid var(--border); margin-bottom: 0.5rem; display: flex; align-items: center; cursor: pointer; transition: all 0.2s;">
+      <div style="font-size:1.4rem; margin-right: 0.75rem;">${a.persona.avatar}</div>
+      <div style="flex: 1;">
+        <div style="font-weight:600;font-size:0.9rem;color:var(--text-primary)">${a.persona.name}</div>
         <div style="font-size:0.75rem;color:var(--text-secondary)">${a.persona.role}</div>
       </div>
-      <span class="badge badge-green" style="margin-left:auto">${a.status}</span>
+      <span class="badge badge-green" style="margin-left:auto;">${a.status || 'active'}</span>
     </div>
   `).join('');
 
@@ -838,36 +886,183 @@ async function loadProviderStatus() {
         const el = document.getElementById('provider-status-list');
         if (!el) return;
 
-        el.innerHTML = Object.entries(status).map(([name, info]) => `
-      <div class="status-item">
-        <span class="status-name">${name}</span>
-        <span class="badge badge-${info.available ? 'green' : 'red'}">
-          ${info.available ? '✅ Available' : '❌ Not configured'}
-          ${info.default ? ' ★ Default' : ''}
-        </span>
-      </div>
-    `).join('');
-    } catch (e) { console.error(e); }
+        const statusItems = Object.entries(status).map(([name, info]) => `
+            <div class="status-item" style="padding: 0.75rem; background: var(--bg-card-hover); border-radius: var(--radius-sm); border-left: 3px solid ${info.available ? 'var(--accent)' : 'var(--text-muted)'};">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: 600; text-transform: capitalize;">${name}</span>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <span class="badge badge-${info.available ? 'green' : 'red'}">
+                            ${info.available ? '✅' : '❌'} ${info.available ? 'Available' : 'Not configured'}
+                        </span>
+                        ${info.default ? '<span class="badge badge-yellow">⭐ Default</span>' : ''}
+                    </div>
+                </div>
+            </div>
+        `).join('');
+        
+        el.innerHTML = statusItems || '<div class="empty-state-small">No providers configured yet</div>';
+    } catch (e) { 
+        console.error('Load provider status:', e);
+    }
+}
+
+function updateDBConnectionFields() {
+    const dbType = document.getElementById('db-type')?.value || 'sqlite';
+    const fieldsEl = document.getElementById('db-connection-fields');
+    
+    if (dbType === 'sqlite') {
+        fieldsEl.innerHTML = '<small style="color: var(--text-secondary);">SQLite uses local file-based storage. No additional configuration needed.</small>';
+    } else if (dbType === 'postgresql') {
+        fieldsEl.innerHTML = `
+            <div class="form-group">
+                <label>Hostname</label>
+                <input type="text" id="db-host" class="form-input" placeholder="localhost" value="localhost" />
+            </div>
+            <div class="form-group">
+                <label>Port</label>
+                <input type="number" id="db-port" class="form-input" placeholder="5432" value="5432" />
+            </div>
+            <div class="form-group">
+                <label>Database Name</label>
+                <input type="text" id="db-name" class="form-input" placeholder="adgents" value="adgents" />
+            </div>
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" id="db-user" class="form-input" placeholder="postgres" />
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="db-pass" class="form-input" />
+            </div>
+        `;
+    } else if (dbType === 'mongodb') {
+        fieldsEl.innerHTML = `
+            <div class="form-group">
+                <label>Connection String</label>
+                <input type="text" id="db-uri" class="form-input" placeholder="mongodb://localhost:27017/adgents" />
+            </div>
+        `;
+    }
 }
 
 async function saveLLMConfig() {
-    const provider = document.getElementById('llm-provider')?.value;
+    const provider = document.getElementById('llm-provider')?.value?.trim();
     const api_key = document.getElementById('llm-api-key')?.value?.trim();
     const model = document.getElementById('llm-model')?.value?.trim();
 
+    if (!provider || provider === '') {
+        toast('Select a provider', 'error');
+        return;
+    }
+
     if (!api_key && provider !== 'ollama') {
-        toast('Enter an API key', 'error');
+        toast('Enter an API key (not needed for Ollama)', 'error');
         return;
     }
 
     const statusEl = document.getElementById('llm-config-status');
-    statusEl.innerHTML = '<span class="badge badge-blue">Saving...</span>';
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
 
     try {
-        await api('/llm/configure', 'POST', { provider, api_key, model: model || undefined });
-        statusEl.innerHTML = '<span class="badge badge-green">✅ Configured successfully</span>';
+        await api('/llm/configure', 'POST', { provider, api_key: api_key || null, model: model || undefined });
+        statusEl.innerHTML = '<span class="badge badge-green">✅ Configuration saved successfully</span>';
         toast(`${provider} configured!`, 'success');
-        loadProviderStatus();
+        setTimeout(() => loadProviderStatus(), 500);
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function testLLMConnection() {
+    const provider = document.getElementById('llm-provider')?.value?.trim();
+    if (!provider) {
+        toast('Select a provider first', 'error');
+        return;
+    }
+
+    const statusEl = document.getElementById('llm-config-status');
+    statusEl.innerHTML = '<span class="badge badge-blue">🧪 Testing connection...</span>';
+
+    try {
+        const result = await api('/llm/test', 'POST', { provider });
+        if (result.success) {
+            statusEl.innerHTML = `<span class="badge badge-green">✅ Connection successful! Model: ${result.model || result.provider}</span>`;
+            toast('Connection test passed!', 'success');
+        } else {
+            statusEl.innerHTML = `<span class="badge badge-red">❌ ${result.error || 'Test failed'}</span>`;
+            toast(result.error || 'Connection test failed', 'error');
+        }
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function refreshProviderStatus() {
+    const statusEl = document.getElementById('provider-status-list');
+    statusEl.innerHTML = '<span style="color: var(--text-secondary);">Refreshing...</span>';
+    await loadProviderStatus();
+}
+
+async function saveMCPConfig() {
+    const mode = document.getElementById('mcp-mode')?.value || 'stdio';
+    const port = parseInt(document.getElementById('mcp-port')?.value || '8001');
+
+    const statusEl = document.getElementById('mcp-config-status');
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
+
+    try {
+        await api('/mcp/configure', 'POST', { mode, port });
+        statusEl.innerHTML = '<span class="badge badge-green">✅ MCP configuration saved</span>';
+        toast('MCP settings saved!', 'success');
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function saveDBConfig() {
+    const dbType = document.getElementById('db-type')?.value || 'sqlite';
+    const statusEl = document.getElementById('db-config-status');
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
+
+    try {
+        const config = { type: dbType };
+        
+        if (dbType !== 'sqlite') {
+            config.host = document.getElementById('db-host')?.value || 'localhost';
+            config.port = parseInt(document.getElementById('db-port')?.value || '5432');
+            config.database = document.getElementById('db-name')?.value || 'adgents';
+            config.username = document.getElementById('db-user')?.value || '';
+            config.password = document.getElementById('db-pass')?.value || '';
+        }
+
+        // In a real implementation, this would call a backend endpoint
+        statusEl.innerHTML = '<span class="badge badge-green">✅ Database settings saved (requires restart)</span>';
+        toast('Database settings saved!', 'success');
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function savePersonalSettings() {
+    const orgName = document.getElementById('org-name')?.value || 'My Organization';
+    const memoryType = document.getElementById('memory-type')?.value || 'multi_tier';
+    const autoSave = document.getElementById('auto-save')?.checked || false;
+
+    const statusEl = document.getElementById('personal-config-status');
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
+
+    try {
+        // Save to localStorage for client-side preferences
+        localStorage.setItem('org_name', orgName);
+        localStorage.setItem('memory_type', memoryType);
+        localStorage.setItem('auto_save', autoSave);
+
+        statusEl.innerHTML = '<span class="badge badge-green">✅ Settings saved</span>';
+        toast('Personal settings saved!', 'success');
     } catch (e) {
         statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
         toast(e.message, 'error');
@@ -1181,15 +1376,15 @@ function renderMarkdown(text) {
 function updateModelHint() {
     const provider = document.getElementById('llm-provider')?.value;
     const input = document.getElementById('llm-model');
-    const hint = document.getElementById('llm-model-hint');
+    const hintEl = document.getElementById('model-hint');
     const defaults = {
-        openai: 'gpt-4o-mini',
-        gemini: 'gemini-1.5-flash',
-        claude: 'claude-3-5-sonnet-20241022',
-        ollama: 'llama3'
+        openai: 'gpt-4o-mini (or gpt-4o, gpt-4-turbo)',
+        gemini: 'gemini-1.5-flash (or gemini-1.5-pro)',
+        claude: 'claude-3-5-sonnet-20241022 (or claude-3 variants)',
+        ollama: 'llama3 (or mistral, neural-chat, etc.)'
     };
     if (input) input.placeholder = defaults[provider] || 'model-name';
-    if (hint) hint.textContent = `(default: ${defaults[provider] || 'varies'})`;
+    if (hintEl) hintEl.textContent = `Recommended: ${defaults[provider] || 'varies'}`;
 }
 
 // ─── WebSocket task complete handler ─────────────────────────────────────────

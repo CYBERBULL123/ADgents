@@ -201,20 +201,29 @@
                         </div>
                         <div class="status-list" id="system-status-list">
                             <div class="status-item">
-                                <span class="status-name">API Server</span>
+                                <span class="status-name">🔴 API Server</span>
                                 <span class="badge badge-green" id="status-api">Connecting...</span>
                             </div>
                             <div class="status-item">
-                                <span class="status-name">LLM Providers</span>
-                                <span class="badge badge-blue" id="status-llm">—</span>
+                                <span class="status-name">🧠 Memory Database</span>
+                                <span class="badge badge-green" id="status-db">SQLite Ready</span>
                             </div>
                             <div class="status-item">
-                                <span class="status-name">Memory DB</span>
-                                <span class="badge badge-green">SQLite Ready</span>
+                                <span class="status-name">⚙️ Skills Engine</span>
+                                <span class="badge badge-green" id="status-skills-engine">Active</span>
                             </div>
                             <div class="status-item">
-                                <span class="status-name">Skills Engine</span>
-                                <span class="badge badge-green">Active</span>
+                                <span class="status-name">🌐 LLM Providers</span>
+                                <span class="badge badge-blue" id="status-llm">Loading...</span>
+                            </div>
+                        </div>
+
+                        <div class="card" style="margin-top:1.5rem; background: var(--bg-card); border: 1px solid var(--border);">
+                            <div class="card-header">
+                                <h3>LLM Provider Details</h3>
+                            </div>
+                            <div class="llm-status-list" id="llm-status-details" style="font-size: 0.85rem; line-height: 1.6;">
+                                <div class="status-item">Loading provider information...</div>
                             </div>
                         </div>
 
@@ -723,52 +732,153 @@
 
             <!-- ── SETTINGS ── -->
             <section class="page" id="page-settings">
-                <div class="two-col">
+                <div class="settings-container">
+                    
+                    <!-- LLM Provider Configuration -->
                     <div class="card">
                         <div class="card-header">
-                            <h3>🤖 LLM Provider</h3>
+                            <h3>🤖 LLM Provider Configuration</h3>
+                            <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0 0 0;">Configure your AI model providers and API keys</p>
                         </div>
                         <div class="form-group">
-                            <label>Provider</label>
-                            <select id="llm-provider" onchange="updateModelHint()">
-                                <option value="openai">OpenAI (GPT-4o)</option>
-                                <option value="gemini">Google Gemini</option>
+                            <label>Select Provider *</label>
+                            <select id="llm-provider" onchange="updateModelHint()" class="form-input">
+                                <option value="">-- Choose a provider --</option>
+                                <option value="openai">🔴 OpenAI (GPT-4, GPT-4o)</option>
+                                <option value="gemini">🔵 Google Gemini</option>
                                 <option value="claude">✨ Anthropic Claude</option>
-                                <option value="ollama">Ollama (Local)</option>
+                                <option value="ollama">🦙 Ollama (Local)</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label>API Key</label>
-                            <input type="password" id="llm-api-key" placeholder="sk-..." />
+                            <label>API Key <span style="color: var(--text-secondary);">(skip for Ollama)</span> *</label>
+                            <input type="password" id="llm-api-key" placeholder="sk-..." class="form-input" />
                         </div>
                         <div class="form-group">
-                            <label>Model</label>
-                            <input type="text" id="llm-model" placeholder="gpt-4o-mini" />
+                            <label>Model Name</label>
+                            <input type="text" id="llm-model" placeholder="e.g., gpt-4o-mini" class="form-input" />
+                            <small id="model-hint" style="display:block; color: var(--text-secondary); margin-top: 0.3rem;"></small>
                         </div>
-                        <button class="btn btn-primary" onclick="saveLLMConfig()">💾 Save & Connect</button>
+                        <div style="display: flex; gap: 0.75rem;">
+                            <button class="btn btn-primary" onclick="saveLLMConfig()">💾 Save Configuration</button>
+                            <button class="btn btn-ghost" onclick="testLLMConnection()">🧪 Test Connection</button>
+                        </div>
                         <div id="llm-config-status" style="margin-top:1rem"></div>
                     </div>
 
+                    <!-- Provider Status -->
                     <div class="card">
                         <div class="card-header">
                             <h3>📡 Provider Status</h3>
                         </div>
-                        <div id="provider-status-list"></div>
+                        <div id="provider-status-list" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
+                        <button class="btn btn-ghost" style="margin-top: 1rem; width: 100%;" onclick="refreshProviderStatus()">🔄 Refresh Status</button>
+                    </div>
 
-                        <div class="card-header" style="margin-top:1.5rem">
-                            <h3>ℹ️ About ADgents</h3>
+                    <!-- MCP Server Configuration -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>🔗 MCP Server Configuration</h3>
+                            <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0 0 0;">Model Context Protocol settings</p>
                         </div>
-                        <div class="about-info">
-                            <p><strong>ADgents</strong> is an autonomous AI agent platform where each agent has a unique
-                                persona, persistent memory, domain expertise, and real-world skills.</p>
-                            <div class="about-badges">
-                                <span class="badge badge-purple">v1.0.0</span>
-                                <span class="badge badge-blue">Python 3.14</span>
-                                <span class="badge badge-green">FastAPI</span>
-                                <span class="badge badge-orange">Open Source</span>
+                        <div class="form-group">
+                            <label>Mode</label>
+                            <select id="mcp-mode" class="form-input">
+                                <option value="stdio">stdio (Standard Input/Output)</option>
+                                <option value="sse">SSE (Server-Sent Events)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Port (for SSE mode)</label>
+                            <input type="number" id="mcp-port" placeholder="8001" class="form-input" />
+                        </div>
+                        <button class="btn btn-primary" onclick="saveMCPConfig()">💾 Save MCP Settings</button>
+                        <div id="mcp-config-status" style="margin-top:1rem"></div>
+                    </div>
+
+                    <!-- Database Settings -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>💾 Database Settings</h3>
+                            <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0 0 0;">Memory storage configuration</p>
+                        </div>
+                        <div class="form-group">
+                            <label>Database Type</label>
+                            <select id="db-type" class="form-input" onchange="updateDBConnectionFields()">
+                                <option value="sqlite">SQLite (Default - Local)</option>
+                                <option value="postgresql">PostgreSQL (Enterprise)</option>
+                                <option value="mongodb">MongoDB (Document)</option>
+                            </select>
+                        </div>
+                        <div id="db-connection-fields"></div>
+                        <button class="btn btn-primary" onclick="saveDBConfig()">💾 Save Database Settings</button>
+                        <div id="db-config-status" style="margin-top:1rem"></div>
+                    </div>
+
+                    <!-- Personal Settings -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>⚙️ Personal Settings</h3>
+                        </div>
+                        <div class="form-group">
+                            <label>Organization Name</label>
+                            <input type="text" id="org-name" placeholder="Your organization" class="form-input" />
+                        </div>
+                        <div class="form-group">
+                            <label>Default Agent Memory Type</label>
+                            <select id="memory-type" class="form-input">
+                                <option value="multi_tier">Multi-Tier (Recommended)</option>
+                                <option value="episodic">Episodic Only</option>
+                                <option value="semantic">Semantic Only</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="auto-save" checked /> Auto-save agent conversations
+                            </label>
+                        </div>
+                        <button class="btn btn-primary" onclick="savePersonalSettings()">💾 Save Settings</button>
+                        <div id="personal-config-status" style="margin-top:1rem"></div>
+                    </div>
+
+                    <!-- System Info & About -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>ℹ️ System Information</h3>
+                        </div>
+                        <div class="system-info">
+                            <div class="info-row">
+                                <span class="info-label">Platform:</span>
+                                <span class="info-value">ADgents v1.0.0</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Framework:</span>
+                                <span class="info-value">FastAPI + Python 3.10+</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">License:</span>
+                                <span class="info-value">Open Source (MIT)</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Repository:</span>
+                                <span class="info-value"><a href="https://github.com/CYBERBULL123/ADgents" target="_blank" style="color: var(--accent); word-break: break-all;">github.com/CYBERBULL123/ADgents</a></span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Docs:</span>
+                                <span class="info-value"><a href="#" onclick="navigate('docs')" style="color: var(--accent);">View Documentation</a></span>
+                            </div>
+                        </div>
+                        <div style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
+                            <p style="margin: 0 0 1rem 0; font-size: 0.9rem; line-height: 1.5;"><strong>ADgents</strong> is an autonomous AI agent platform with unique personas, persistent memory, and real-world skills.</p>
+                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                <span class="badge badge-purple">Autonomous</span>
+                                <span class="badge badge-blue">Multi-Agent</span>
+                                <span class="badge badge-green">Persistent Memory</span>
+                                <span class="badge badge-orange">Extensible</span>
                             </div>
                         </div>
                     </div>
+
                 </div>
             </section>
 

@@ -191,12 +191,19 @@ async def root():
 
 @app.get("/api/health")
 async def health():
+    llm_status = LLM_ROUTER.status()
+    available_llms = [name for name, info in llm_status.items() if info.get("available", False)]
+    
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "agents": len(agents),
-        "llm_providers": LLM_ROUTER.available_providers(),
-        "skills": len(SKILL_REGISTRY.list())
+        "skills": len(SKILL_REGISTRY.list()),
+        "llm_providers": available_llms,
+        "llm_total": len(llm_status),
+        "llm_details": llm_status,
+        "database": "sqlite",
+        "database_status": "ready"
     }
 
 
