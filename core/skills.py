@@ -45,6 +45,23 @@ class Skill:
                 output=output,
                 execution_time=time.time() - start
             )
+        except TypeError as te:
+            # Handle parameter mismatches for custom skills
+            if "unexpected keyword argument" in str(te) and self.is_custom:
+                import inspect
+                try:
+                    sig = inspect.signature(self.handler)
+                    filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+                    output = self.handler(**filtered)
+                    return SkillResult(success=True, output=output, execution_time=time.time() - start)
+                except:
+                    pass
+            return SkillResult(
+                success=False,
+                output=None,
+                error=f"{type(te).__name__}: {str(te)}\n{traceback.format_exc()}",
+                execution_time=time.time() - start
+            )
         except Exception as e:
             return SkillResult(
                 success=False,

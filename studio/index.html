@@ -18,6 +18,25 @@
 </head>
 
 <body>
+    <!-- Loading Overlay -->
+    <div id="app-loading-overlay" style="position: fixed; inset: 0; background: rgba(6, 8, 17, 0.95); z-index: 10000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(6px);">
+        <div style="text-align: center; color: #e0e0e0; font-family: 'Inter', sans-serif;">
+            <div style="font-size: 3rem; margin-bottom: 1.5rem; animation: pulse 1.5s ease-in-out infinite;">⚡</div>
+            <div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 0.5rem;">ADgents Studio</div>
+            <div style="color: #8b8ba8; margin-bottom: 1.5rem;">Initializing application...</div>
+            <div style="width: 200px; height: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; overflow: hidden;">
+                <div style="width: 30%; height: 100%; background: linear-gradient(90deg, #7c3aed, #2563eb); animation: slide 1.5s ease-in-out infinite;"></div>
+            </div>
+            <div style="margin-top: 1.5rem; font-size: 0.85rem; color: #4f4f6e;">
+                <div id="loading-status">Connecting to API...</div>
+            </div>
+        </div>
+        <style>
+            @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+            @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
+        </style>
+    </div>
+
     <!-- Animated background -->
     <div class="bg-grid"></div>
     <div class="bg-glow bg-glow-1"></div>

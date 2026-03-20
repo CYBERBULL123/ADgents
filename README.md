@@ -272,6 +272,49 @@ User Task
 
 ---
 
-## 📄 License
+## 🛠️ Building & Publishing
+
+ADgents includes a complete automated build system for creating and publishing pip packages:
+
+### Quick Build
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\build.ps1          # Build the package
+.\scripts\build.ps1 -Publish # Build and publish to PyPI
+```
+
+**Linux/Mac (Bash):**
+```bash
+./scripts/build.sh           # Build the package
+./scripts/build.sh --publish # Build and publish to PyPI
+```
+
+**All Platforms (Makefile):**
+```bash
+make build       # Build package
+make test        # Run tests
+make publish     # Publish to PyPI
+make help        # View all commands
+```
+
+### Automated Release
+
+Simply push a version tag and GitHub Actions automatically:
+- Builds the package on multiple Python versions
+- Runs the test suite
+- Publishes to PyPI
+- Deploys documentation
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+See [RELEASE.md](RELEASE.md) and [BUILD.md](BUILD.md) for detailed documentation.
+
+---
+
+## 📝 License
 
 MIT — Build freely, ship boldly.

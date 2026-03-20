@@ -67,34 +67,138 @@ function navigate(page) {
 }
 
 // ─── API Helpers ─────────────────────────────────────────────────────────────
-async function api(path, method = 'GET', body = null) {
+async function api(path, method = 'GET', body = null, timeout = 10000) {
     const opts = {
         method,
         headers: { 'Content-Type': 'application/json' }
     };
     if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(`${API}${path}`, opts);
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    try {
+        const res = await fetch(`${API}${path}`, { ...opts, signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        return res.json();
+    } catch (e) {
+        clearTimeout(timeoutId);
+        if (e.name === 'AbortError') {
+            throw new Error(`Request timeout for ${path} (${timeout}ms)`);
+        }
+        throw e;
     }
-    return res.json();
 }
 
 // ─── App Init ─────────────────────────────────────────────────────────────────
 async function init() {
-    await checkApiStatus();
-    await loadSkills();
-    await loadTemplates();
-    await loadAgents();
-    updateDashboard();
-    initBuilder();
-    setInterval(checkApiStatus, 10000);
+    try {
+        const updateLoadingStatus = (msg) => {
+            const el = document.getElementById('loading-status');
+            if (el) el.textContent = msg;
+            console.log('[ADgents]', msg);
+        };
+        
+        updateLoadingStatus('Initializing application...');
+        
+        // Set a timeout for the entire init sequence
+        const initPromise = Promise.race([
+            (async () => {
+                updateLoadingStatus('Checking API status...');
+                console.log('[ADgents] Checking API status...');
+                await checkApiStatus();
+                
+                updateLoadingStatus('Loading skills...');
+                console.log('[ADgents] Loading skills...');
+                await loadSkills();
+                
+                updateLoadingStatus('Loading templates...');
+                console.log('[ADgents] Loading templates...');
+                await loadTemplates();
+                
+                updateLoadingStatus('Loading agents...');
+                console.log('[ADgents] Loading agents...');
+                await loadAgents();
+                
+                updateLoadingStatus('Updating dashboard...');
+                console.log('[ADgents] Updating dashboard...');
+                updateDashboard();
+                
+                updateLoadingStatus('Initializing builder...');
+                console.log('[ADgents] Initializing builder...');
+                initBuilder();
+                
+                console.log('[ADgents] Initialization complete!');
+                return true;
+            })(),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Initialization timeout after 30 seconds')), 30000)
+            )
+        ]);
+        
+        await initPromise;
+        
+        // Hide loading overlay
+        const overlay = document.getElementById('app-loading-overlay');
+        if (overlay) {
+            overlay.style.opacity = '0';
+            overlay.style.transition = 'opacity 0.3s ease';
+            setTimeout(() => overlay.style.display = 'none', 300);
+        }
+        
+        // Set up periodic API status checks
+        setInterval(checkApiStatus, 10000);
+        
+    } catch (e) {
+        console.error('[ADgents] Initialization error:', e);
+        
+        // Update loading overlay to show error
+        const overlay = document.getElementById('app-loading-overlay');
+        if (overlay) {
+            overlay.innerHTML = `
+                <div style="text-align: center; color: #e0e0e0; font-family: 'Inter', sans-serif;">
+                    <div style="font-size: 2rem; margin-bottom: 1rem;">⚠️</div>
+                    <div style="font-size: 1.2rem; font-weight: 600; margin-bottom: 0.5rem;">Initialization Error</div>
+                    <div style="color: #8b8ba8; margin-bottom: 1rem; max-width: 400px;">
+                        <div>${e.message || 'An error occurred during initialization'}</div>
+                    </div>
+                    <div style="font-size: 0.85rem; color: #4f4f6e; margin-bottom: 1.5rem;">
+                        Check your console (F12) for details. The dashboard may still load with limited functionality.
+                    </div>
+                    <button onclick="location.reload()" style="background: #7c3aed; color: white; border: none; padding: 0.5rem 1.5rem; border-radius: 6px; cursor: pointer;">Retry</button>
+                </div>
+            `;
+        }
+        
+        // Try to at least show the dashboard anyway
+        try {
+            updateDashboard();
+            initBuilder();
+            
+            // Hide overlay after 3 seconds
+            if (overlay) {
+                setTimeout(() => {
+                    overlay.style.opacity = '0';
+                    overlay.style.transition = 'opacity 0.3s ease';
+                    setTimeout(() => overlay.style.display = 'none', 300);
+                }, 3000);
+            }
+        } catch (e2) {
+            console.error('[ADgents] Failed to update UI:', e2);
+        }
+    }
 }
 
 async function checkApiStatus() {
     try {
-        const health = await api('/health');
+        console.log('[ADgents] Checking API health...');
+        const health = await api('/health', 'GET', null, 5000);
+        
         const dot = document.getElementById('api-status-dot');
         const text = document.getElementById('api-status-text');
         dot.className = 'status-dot online';
@@ -133,11 +237,14 @@ async function checkApiStatus() {
         } else {
             llmDetailEl.innerHTML = '<div class="status-item">No providers configured</div>';
         }
+        
+        console.log('[ADgents] API health check passed');
     } catch (e) {
+        console.error('[ADgents] API health check failed:', e);
         const dot = document.getElementById('api-status-dot');
         const text = document.getElementById('api-status-text');
         dot.className = 'status-dot offline';
-        text.textContent = 'API Offline';
+        text.textContent = 'API Offline: ' + (e.message || 'Connection failed');
         document.getElementById('status-api').textContent = '❌ Offline';
         document.getElementById('status-api').className = 'badge badge-red';
         document.getElementById('status-db').textContent = '❓ Unknown';
@@ -151,24 +258,40 @@ async function loadAgents() {
     try {
         const data = await api('/agents');
         state.agents = {};
-        (data.agents || []).forEach(a => { state.agents[a.persona.id] = a; });
+        (data.agents || []).forEach(a => { 
+            state.agents[a.persona.id] = a;
+        });
         updateAgentCount();
         updateDashboard();
-    } catch (e) { console.error('Load agents:', e); }
+        console.log(`[ADgents] Loaded ${Object.keys(state.agents).length} agents`);
+    } catch (e) { 
+        console.error('[ADgents] Error loading agents:', e);
+        // Continue with empty agents list
+        state.agents = {};
+        updateAgentCount();
+    }
 }
 
 async function loadSkills() {
     try {
         const data = await api('/skills');
         state.skills = data.skills || [];
-    } catch (e) { console.error('Load skills:', e); }
+        console.log(`[ADgents] Loaded ${state.skills.length} skills`);
+    } catch (e) { 
+        console.error('[ADgents] Error loading skills:', e);
+        state.skills = [];
+    }
 }
 
 async function loadTemplates() {
     try {
         const data = await api('/templates');
         state.templates = data.templates || {};
-    } catch (e) { console.error('Load templates:', e); }
+        console.log(`[ADgents] Loaded ${Object.keys(state.templates).length} templates`);
+    } catch (e) { 
+        console.error('[ADgents] Error loading templates:', e);
+        state.templates = {};
+    }
 }
 
 function updateAgentCount() {
