@@ -54,19 +54,38 @@ docker run -p 8000:8000 adgents
 
 ### Environment Variables
 
-Create a `.env` file in your project root:
+Create a `.env` file in your project root with the following options:
+
+#### LLM Provider Configuration
+
+Choose one or more providers and set their credentials:
 
 ```bash
-# LLM Providers (choose one or more)
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-GOOGLE_API_KEY=your-api-key
-OLLAMA_BASE_URL=http://localhost:11434
+# ===== GOOGLE GEMINI (Recommended for quick setup) =====
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-1.5-flash  # Default: gemini-1.5-flash (or gemini-1.5-pro)
 
-# Default LLM Provider
-DEFAULT_LLM_PROVIDER=gemini  # Options: openai, anthropic, gemini, ollama
+# ===== OPENAI GPT MODELS =====
+OPENAI_API_KEY=sk-your-key-here
+OPENAI_MODEL=gpt-4o-mini  # Default: gpt-4o-mini (or gpt-4, gpt-4-turbo, gpt-3.5-turbo)
 
-# Server Configuration
+# ===== ANTHROPIC CLAUDE =====
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022  # Default: claude-3-5-sonnet (or claude-3-opus, claude-3-haiku)
+
+# ===== LOCAL OLLAMA (No API key needed) =====
+OLLAMA_BASE_URL=http://localhost:11434  # Local Ollama instance
+OLLAMA_MODEL=llama2  # Default: llama2 (or mistral, neural-chat, etc.)
+
+# ===== DEFAULT PROVIDER SELECTION =====
+DEFAULT_LLM_PROVIDER=gemini  # Options: openai, anthropic, gemini, ollama, mock
+DEFAULT_LLM_MODEL=gemini-1.5-flash  # Override default model for selected provider
+```
+
+#### Server Configuration
+
+```bash
+# Server Setup
 SERVER_HOST=0.0.0.0
 SERVER_PORT=8000
 DEBUG=false
@@ -78,13 +97,17 @@ DATA_DIR=./data
 ### Programmatic Configuration
 
 ```python
-from core.llm import LLM_ROUTER
+from core.llm import LLM_ROUTER, OpenAIProvider, GeminiProvider, AnthropicProvider
 
-# Set default provider
-LLM_ROUTER.set_default_provider("gemini")
+# Method 1: Set default provider
+LLM_ROUTER.set_default("gemini")
 
-# Register custom provider
-LLM_ROUTER.register_provider("custom", CustomLLMProvider())
+# Method 2: Initialize provider with custom model
+gemini = GeminiProvider(model="gemini-1.5-pro")
+LLM_ROUTER.register(gemini)
+
+# Method 3: Configure all providers automatically from env vars
+# (This happens automatically on import)
 ```
 
 ## Verifying Installation
@@ -128,42 +151,73 @@ response = agent.chat("Hello, are you working?")
 print(response)
 ```
 
-## API Key Setup
+## API Key Setup & Provider Configuration
 
-### Google Gemini
+### Google Gemini (Recommended)
+
+**Best for:** Quick setup, free tier available, excellent performance
 
 1. Visit https://makersuite.google.com/app/apikey
-2. Create a new API key
-3. Add to environment:
+2. Click "Create API Key"
+3. Copy your API key
+4. Add to `.env`:
 
 ```bash
-export GOOGLE_API_KEY=your-key-here
+GEMINI_API_KEY=your-key-here
+GEMINI_MODEL=gemini-1.5-flash  # or gemini-1.5-pro for higher quality
+DEFAULT_LLM_PROVIDER=gemini
 ```
 
-### OpenAI
+**Available Models:**
+- `gemini-1.5-flash` - Fast, cost-effective (default)
+- `gemini-1.5-pro` - Higher quality, slower
+- `gemini-1.0-pro` - Previous generation
+
+### OpenAI GPT
+
+**Best for:** Advanced reasoning, large projects
 
 1. Visit https://platform.openai.com/api-keys
-2. Create a new API key
-3. Add to environment:
+2. Click "Create new secret key"
+3. Add to `.env`:
 
 ```bash
-export OPENAI_API_KEY=sk-your-key-here
+OPENAI_API_KEY=sk-your-key-here
+OPENAI_MODEL=gpt-4o-mini  # Fast and cheap
+DEFAULT_LLM_PROVIDER=openai
 ```
+
+**Available Models:**
+- `gpt-4o-mini` - Fast, cost-effective (recommended)
+- `gpt-4` - Most capable
+- `gpt-4-turbo` - Good balance
+- `gpt-3.5-turbo` - Cheapest
 
 ### Anthropic Claude
 
+**Best for:** Extended context, safety-focused
+
 1. Visit https://console.anthropic.com/
 2. Create a new API key
-3. Add to environment:
+3. Add to `.env`:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-your-key-here
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+DEFAULT_LLM_PROVIDER=anthropic
 ```
 
-### Running Locally with Ollama
+**Available Models:**
+- `claude-3-5-sonnet-20241022` - Best performance/cost ratio (recommended)
+- `claude-3-opus-20240229` - Most capable, slower
+- `claude-3-haiku-20240307` - Fastest, budget-friendly
 
-1. Install Ollama: https://ollama.ai
-2. Start Ollama:
+### Ollama (Local, No API Key)
+
+**Best for:** Privacy, offline use, development/testing
+
+1. Install from https://ollama.ai
+2. Start Ollama service:
 
 ```bash
 ollama serve
@@ -172,8 +226,25 @@ ollama serve
 3. Pull a model:
 
 ```bash
-ollama pull llama2
+ollama pull llama2        # Meta's Llama 2
+ollama pull mistral       # Mistral AI
+ollama pull neural-chat   # Intel's model
 ```
+
+4. Add to `.env`:
+
+```bash
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=llama2
+DEFAULT_LLM_PROVIDER=ollama
+```
+
+**Available Models:**
+- `llama2` - Popular, good quality
+- `mistral` - Fast, efficient
+- `neural-chat` - Optimized for conversation
+- `dolphin-mixtral` - Creative writing
+
 
 4. Set environment:
 

@@ -8,8 +8,13 @@ import json
 import time
 import traceback
 import httpx
+from pathlib import Path
 from typing import Callable, Dict, Any, List, Optional
 from dataclasses import dataclass, field
+
+# Directory for agent-created files
+FILES_DIR = Path(__file__).parent.parent / "data" / "files"
+FILES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass
@@ -192,17 +197,30 @@ def _skill_file_read(path: str) -> str:
 
 
 def _skill_file_write(path: str, content: str, mode: str = "w") -> str:
-    """Write content to a file."""
+    """Write content to a file. Relative paths are saved to data/files/."""
     from pathlib import Path
+    
     p = Path(path)
+    
+    # If path is relative (not absolute), save to data/files/
+    if not p.is_absolute():
+        p = FILES_DIR / path
+    
+    # Create parent directories if needed
     p.parent.mkdir(parents=True, exist_ok=True)
     
     try:
         with open(p, mode, encoding="utf-8") as f:
             f.write(content)
-        return f"Successfully wrote {len(content)} characters to {path}"
+        
+        # Return relative path from project root for user-friendly display
+        try:
+            rel_path = p.relative_to(Path(__file__).parent.parent)
+            return f"✅ Successfully wrote {len(content)} characters to {rel_path}"
+        except ValueError:
+            return f"✅ Successfully wrote {len(content)} characters to {p}"
     except Exception as e:
-        return f"Could not write file: {e}"
+        return f"❌ Could not write file: {e}"
 
 
 def _skill_api_call(url: str, method: str = "GET", headers: Dict = None, 

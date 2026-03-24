@@ -427,6 +427,11 @@ class LLMRouter:
             except Exception as e:
                 print(f"Warning: Failed to register {provider().name if hasattr(provider, 'name') else 'provider'}: {e}")
         
+        # Check for explicit DEFAULT_LLM_PROVIDER environment variable
+        env_provider = os.getenv("DEFAULT_LLM_PROVIDER")
+        if env_provider and env_provider in self._providers:
+            self._default_provider = env_provider
+        
         if not self._default_provider:
             self._default_provider = "mock"
         

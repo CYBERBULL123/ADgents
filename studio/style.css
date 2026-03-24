@@ -1362,6 +1362,109 @@ textarea {
   color: var(--text-muted);
 }
 
+/* ─── Files Grid ─────────────────────────────────────────────── */
+.files-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  transition: all 0.3s;
+}
+
+.file-card:hover {
+  border-color: rgba(124, 58, 237, 0.4);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+
+.file-icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-light);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(124, 58, 237, 0.2);
+}
+
+.file-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-name {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+
+.file-meta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  line-height: 1.5;
+}
+
+.file-path {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.5;
+  opacity: 0.8;
+}
+
+.file-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+
+.file-actions .btn-sm {
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  min-width: 70px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  font-weight: 500;
+}
+
+/* Responsive adjustments for files */
+@media (max-width: 768px) {
+  .file-card {
+    flex-wrap: wrap;
+  }
+  
+  .file-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
 /* ─── Skills Page ───────────────────────────────────────── */
 .skills-section-label {
   font-size: 0.72rem;
@@ -2393,21 +2496,123 @@ textarea {
 }
 
 @media (max-width: 600px) {
+  /* ─── Page & Container ─── */
   .page-container {
-    padding: 1rem;
+    padding: 0.75rem;
   }
 
+  /* ─── Topbar ─── */
+  .topbar {
+    padding: 0 0.75rem;
+    height: 60px;
+    gap: 0.5rem;
+  }
+
+  .topbar-left {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .topbar-right {
+    gap: 0.5rem;
+  }
+
+  .topbar-right .btn-ghost {
+    display: none;
+  }
+
+  /* ─── Typography ─── */
+  .page-title {
+    font-size: 1rem;
+  }
+
+  .breadcrumb {
+    font-size: 0.7rem;
+  }
+
+  /* ─── Stats Grid ─── */
   .stats-grid {
     grid-template-columns: 1fr 1fr;
-    gap: 0.75rem;
+    gap: 0.6rem;
+  }
+
+  .stat-card {
+    padding: 1rem;
+    border-radius: var(--radius-sm);
+  }
+
+  .stat-icon {
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
   }
 
   .stat-value {
-    font-size: 1.8rem;
+    font-size: 1.6rem;
+    letter-spacing: -0.5px;
   }
 
-  .task-control-bar {
+  .stat-label {
+    font-size: 0.75rem;
+  }
+
+  .stat-trend {
+    font-size: 0.65rem;
+  }
+
+  /* ─── Quick Start Grid ─── */
+  .quickstart-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+  }
+
+  .quickstart-item {
+    padding: 0.75rem 0.6rem;
+    border-radius: var(--radius-xs);
+  }
+
+  .qs-avatar {
+    font-size: 1.3rem;
+    margin-bottom: 0.3rem;
+  }
+
+  .qs-name {
+    font-size: 0.75rem;
+  }
+
+  .qs-role {
+    font-size: 0.65rem;
+  }
+
+  /* ─── Cards ─── */
+  .card {
     padding: 1rem;
+    border-radius: var(--radius-sm);
+  }
+
+  .card-header {
+    margin-bottom: 1rem;
+  }
+
+  .card-header h3 {
+    font-size: 0.95rem;
+  }
+
+  /* ─── Buttons ─── */
+  .btn {
+    padding: 0.45rem 0.85rem;
+    font-size: 0.8rem;
+    border-radius: var(--radius-xs);
+  }
+
+  .btn-large {
+    padding: 0.6rem 1.5rem;
+    font-size: 0.9rem;
+  }
+
+  /* ─── Forms ─── */
+  .task-control-bar {
+    padding: 0.75rem;
+    gap: 0.75rem;
   }
 
   .task-options-group {
@@ -2420,25 +2625,89 @@ textarea {
 
   .form-grid {
     grid-template-columns: 1fr;
+    gap: 0.8rem;
   }
 
   .form-group.full-width {
     grid-column: 1;
   }
 
+  .form-group label {
+    font-size: 0.8rem;
+  }
+
+  .form-input {
+    padding: 0.55rem 0.75rem;
+    font-size: 16px;
+  }
+
+  /* ─── Layout ─── */
   .two-col {
-    gap: 1rem;
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
   }
 
   .task-feed-card {
-    min-height: 300px;
+    min-height: 250px;
   }
 
-  .topbar-right .btn-ghost {
-    display: none;
+  /* ─── History List ─── */
+  .history-toolbar {
+    flex-wrap: wrap;
+    gap: 0.5rem;
   }
 
-  /* hide Refresh on tiny screens */
+  .history-search {
+    font-size: 0.8rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .hist-select {
+    font-size: 0.75rem;
+    padding: 0.5rem;
+  }
+
+  .hist-card {
+    border-radius: var(--radius-sm);
+  }
+
+  .hist-card-header {
+    padding: 0.75rem 1rem;
+    gap: 0.5rem;
+  }
+
+  .hist-avatar {
+    font-size: 1.2rem;
+  }
+
+  .hist-task-text {
+    font-size: 0.85rem;
+  }
+
+  .hist-sub {
+    font-size: 0.7rem;
+  }
+
+  /* ─── Badges & Status ─── */
+  .badge {
+    font-size: 0.65rem;
+    padding: 0.15rem 0.5rem;
+  }
+
+  .nav-badge {
+    font-size: 0.6rem;
+    padding: 0.08rem 0.4rem;
+  }
+
+  /* ─── Skill Cards ─── */
+  .skills-grid-full {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .skill-card {
+    padding: 1rem;
+  }
 }
 
 /* ─── Markdown content styling ──────────────────────────────── */
@@ -2555,6 +2824,8 @@ textarea {
   border-collapse: collapse;
   font-size: 0.85rem;
   margin: 0.6rem 0;
+  overflow: auto;
+  display: block;
 }
 
 .md-content th,
@@ -2564,12 +2835,14 @@ textarea {
   text-align: left;
   border-bottom: 1px solid var(--border);
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .md-content td,
 .md-bubble td {
   padding: 0.35rem 0.75rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  word-break: break-word;
 }
 
 .md-content tr:last-child td,
@@ -3009,9 +3282,76 @@ textarea {
     width: 100%;
     position: relative;
     top: 0;
+    max-height: 40vh;
+    overflow-y: auto;
   }
   .docs-content-area {
     padding: 1.5rem;
+    height: auto;
+  }
+  
+  .docs-content-area #docs-content {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  .docs-layout {
+    height: auto;
+  }
+  
+  .docs-sidebar {
+    width: 100%;
+    max-height: 35vh;
+    margin-bottom: 1rem;
+  }
+
+  .docs-sidebar-title {
+    font-size: 0.7rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .docs-nav-item {
+    padding: 0.5rem 0.6rem;
+    font-size: 0.8rem;
+  }
+
+  .docs-content-area {
+    padding: 1rem;
+    height: auto;
+  }
+
+  .docs-content-area #docs-content {
+    max-width: 100%;
+    font-size: 0.9rem;
+  }
+
+  .docs-content-area #docs-content h1 {
+    font-size: 1.3rem;
+  }
+
+  .docs-content-area #docs-content h2 {
+    font-size: 1.1rem;
+  }
+
+  .docs-content-area #docs-content h3 {
+    font-size: 0.95rem;
+  }
+
+  .docs-content-area #docs-content pre {
+    padding: 0.75rem;
+    font-size: 0.75rem;
+    overflow-x: auto;
+  }
+
+  .docs-content-area #docs-content p {
+    margin-bottom: 1rem;
+  }
+
+  .docs-content-area #docs-content ul,
+  .docs-content-area #docs-content ol {
+    padding-left: 1.2rem;
+    margin-bottom: 1rem;
   }
 }
 

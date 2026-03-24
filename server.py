@@ -5,6 +5,8 @@ REST + WebSocket API for the agent platform.
 import json
 import asyncio
 import uuid
+import logging
+import os
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 import sys
@@ -23,18 +25,29 @@ from core.persona import Persona, PERSONA_TEMPLATES
 from core.skills import SKILL_REGISTRY, Skill
 from core.llm import LLM_ROUTER
 from core.memory import AgentMemory
+from core.memory import AgentMemory
 from core.agent_store import save_agent_persona, load_all_personas, delete_agent_persona
 from core.task_db import save_task, list_tasks, get_task, delete_task, task_stats
-from core.crew import Crew
-from core.crew_manager import CrewManager, get_crew_manager, AgentTemplate, CrewConfig
 from core.a2a_protocol import A2AProtocolManager, get_a2a_manager, A2AMessage
 from core.mcp_server import MCPServer
+
+# ─── Logger Setup ─────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+
+# ─── Suppress verbose Pydantic warnings ───────────────────────────────────────
+import warnings
+try:
+    from pydantic import PydanticJsonSchemaWarning
+    warnings.filterwarnings("ignore", category=PydanticJsonSchemaWarning)
+except ImportError:
+    warnings.filterwarnings("ignore", message=".*non-serializable-default.*")
 
 # ─── Pydantic Models ──────────────────────────────────────────────────────────
 
 class CreateAgentRequest(BaseModel):
     template: Optional[str] = None
     persona: Optional[Dict] = None
+    is_deep_agent: Optional[bool] = False  # Enable LangChain advanced features
 
 class ChatRequest(BaseModel):
     message: str
@@ -44,10 +57,7 @@ class TaskRequest(BaseModel):
     task: str
     agent_id: str
     max_iterations: Optional[int] = 10
-
-class CrewRunRequest(BaseModel):
-    task: str
-    agent_ids: List[str]
+    use_deep_agent: Optional[bool] = False  # Use Deep Agents SDK if True
 
 class LearnRequest(BaseModel):
     agent_id: str
@@ -68,7 +78,7 @@ class RegisterSkillRequest(BaseModel):
     description: str
     category: str = "custom"
     parameters: Dict[str, Any] = {"type": "object", "properties": {}}
-    handler_code: str  # Python code defining a 'handler' function
+    handler_code: str
 
 class GenerateSkillRequest(BaseModel):
     description: str
@@ -76,8 +86,6 @@ class GenerateSkillRequest(BaseModel):
 class MCPConfigRequest(BaseModel):
     mode: Optional[str] = "stdio"
     port: Optional[int] = 8001
-
-# ─── Crew Management Models ───────────────────────────────────────────────────
 
 class CreateTemplateRequest(BaseModel):
     name: str
@@ -88,34 +96,17 @@ class CreateTemplateRequest(BaseModel):
     instructions: str = ""
     model: str = "gemini-2.0-flash"
 
-class CreateCrewRequest(BaseModel):
+class CreateOrganizationRequest(BaseModel):
     name: str
     description: str = ""
-    organization: str = "default"
-    members: Optional[List[Dict]] = None
-    communication_protocol: str = "a2a"
-
-class AddCrewMemberRequest(BaseModel):
-    crew_id: str
-    agent_id: str
-    agent_name: str
-    role: str = "contributor"
-
-class UpdateMemberStatusRequest(BaseModel):
-    crew_id: str
-    agent_id: str
-    status: str
-    current_task: Optional[str] = None
 
 class SendA2AMessageRequest(BaseModel):
-    crew_id: str
     from_agent: str
     to_agent: str
     message_type: str
     content: Dict[str, Any]
 
 class BroadcastA2AMessageRequest(BaseModel):
-    crew_id: str
     from_agent: str
     message_type: str
     content: Dict[str, Any]
@@ -140,6 +131,12 @@ app.add_middleware(
 studio_path = Path(__file__).parent / "studio"
 if studio_path.exists():
     app.mount("/studio", StaticFiles(directory=str(studio_path), html=True), name="studio")
+
+# Serve studio at root path
+@app.get("/")
+async def serve_studio():
+    """Redirect root to studio."""
+    return RedirectResponse(url="/studio/", status_code=302)
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -177,6 +174,327 @@ manager = ConnectionManager()
 agents: Dict[str, Agent] = {}
 for _p in load_all_personas():
     agents[_p.id] = Agent(persona=_p)
+
+
+# ─── Deep Agent Execution ─────────────────────────────────────────────────────
+def _run_deep_agent(agent: Agent, task: str, max_iterations: int, on_thought_callback: callable) -> AgentTask:
+    """
+    Execute an agent using the Deep Agents SDK (specialized LangChain-based agent framework).
+    Deep Agents provide: planning, file system management, subagents, long-term memory.
+    
+    Args:
+        agent: ADgents Agent instance with is_deep_agent=True
+        task: The task to execute
+        max_iterations: Max iterations for the agent
+        on_thought_callback: Callback function to report thought steps
+    
+    Returns:
+        AgentTask with results
+    """
+    started_at = datetime.utcnow().isoformat()
+    
+    try:
+        # Try to import deepagents
+        try:
+            from deepagents import create_deep_agent
+        except ImportError:
+            # Fallback: if deepagents not installed, use standard agent.run()
+            logger.warning("Deep Agents SDK not installed. Install with: pip install deepagents")
+            logger.info(f"Falling back to standard ReAct loop for '{agent.persona.name}'")
+            on_thought_callback(ThoughtStep(
+                step_type="thought",
+                content="⚠️ Deep Agents SDK not installed. Using standard ReAct. Run: pip install deepagents",
+                timestamp=datetime.utcnow().isoformat()
+            ))
+            # Fallback to regular agent
+            return agent.run(task, max_iterations)
+        
+        logger.info(f"🧠 Running Deep Agent '{agent.persona.name}' with task: {task[:100]}...")
+        
+        # Emit initial thought
+        on_thought_callback(ThoughtStep(
+            step_type="thought",
+            content="🧠 Deep Agent Mode - Planning, file management, and advanced reasoning enabled",
+            timestamp=datetime.utcnow().isoformat()
+        ))
+        
+        # Get LLM model for Deep Agents - try to create a LangChain model
+        langchain_model = None
+        status = LLM_ROUTER.status()
+        
+        try:
+            # Try to use configured providers
+            if status.get("anthropic", {}).get("available"):
+                from langchain_anthropic import ChatAnthropic
+                api_key = os.getenv("ANTHROPIC_API_KEY")
+                if api_key:
+                    langchain_model = ChatAnthropic(api_key=api_key, model="claude-3-5-sonnet-20241022")
+                    logger.info("Using Anthropic/Claude for Deep Agent")
+            elif status.get("openai", {}).get("available"):
+                from langchain_openai import ChatOpenAI
+                api_key = os.getenv("OPENAI_API_KEY")
+                if api_key:
+                    langchain_model = ChatOpenAI(api_key=api_key, model="gpt-4o-mini")
+                    logger.info("Using OpenAI/GPT-4o for Deep Agent")
+            elif status.get("gemini", {}).get("available"):
+                from langchain_google_genai import ChatGoogleGenerativeAI
+                api_key = os.getenv("GEMINI_API_KEY")
+                if api_key:
+                    langchain_model = ChatGoogleGenerativeAI(api_key=api_key, model="gemini-1.5-flash")
+                    logger.info("Using Gemini for Deep Agent")
+        except Exception as e:
+            logger.warning(f"Failed to initialize LangChain model: {e}")
+            langchain_model = None
+        
+        # If no model available, fallback to standard agent
+        if not langchain_model:
+            logger.warning("No LLM configured for Deep Agents. Falling back to standard ReAct")
+            on_thought_callback(ThoughtStep(
+                step_type="thought",
+                content="⚠️ No LLM API key configured. Using standard ReAct. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY",
+                timestamp=datetime.utcnow().isoformat()
+            ))
+            return agent.run(task, max_iterations)
+        
+        # Convert agent skills to deepagents-compatible LangChain tools
+        from langchain_core.tools import StructuredTool
+        import inspect
+        
+        tools = []
+        for skill in agent.skill_registry.list():
+            try:
+                skill_name = skill.name
+                skill_desc = skill.description or "Execute skill"
+                skill_handler = skill.handler
+                skill_params = skill.parameters or {}
+                
+                logger.info(f"[Deep Agent Tool] Converting skill: {skill_name} with params: {list(skill_params.get('properties', {}).keys())}")
+                
+                # Get the actual function signature to determine parameters
+                sig = inspect.signature(skill_handler)
+                param_names = list(sig.parameters.keys())
+                
+                logger.info(f"[Deep Agent Tool] Handler signature for {skill_name}: {param_names}")
+                
+                # Create tool wrapper that properly maps parameters
+                def make_skill_tool(handler, name, desc, params_info, sig):
+                    # Build a dynamic function with proper type hints
+                    param_names = list(sig.parameters.keys())
+                    
+                    if not param_names:
+                        # No parameters - shouldn't happen but handle it
+                        def no_param_tool() -> str:
+                            try:
+                                result = handler({})
+                                logger.info(f"[Skill {name}] Success")
+                                return str(result)
+                            except Exception as e:
+                                logger.error(f"[Skill {name}] Error: {e}", exc_info=True)
+                                return f"Error: {str(e)}"
+                        return no_param_tool, name, desc
+                    
+                    elif len(param_names) == 1:
+                        # Single parameter - use first param name
+                        param_name = param_names[0]
+                        param_type = sig.parameters[param_name].annotation or str
+                        
+                        def single_param_tool(**kwargs) -> str:
+                            try:
+                                # Extract the value from kwargs using the actual parameter name
+                                value = kwargs.get(param_name, kwargs.get('query', kwargs.get('text', '')))
+                                result = handler({param_name: value})
+                                logger.info(f"[Skill {name}] Success")
+                                return str(result)
+                            except Exception as e:
+                                logger.error(f"[Skill {name}] Error: {e}", exc_info=True)
+                                return f"Error: {str(e)}"
+                        
+                        # Set proper annotation
+                        single_param_tool.__annotations__ = {param_name: param_type, 'return': str}
+                        return single_param_tool, name, desc
+                    
+                    else:
+                        # Multiple parameters - build dynamic function
+                        def multi_param_tool(**kwargs) -> str:
+                            try:
+                                # Build args dict with actual parameter names
+                                args = {}
+                                for pname in param_names:
+                                    if pname in kwargs:
+                                        args[pname] = kwargs[pname]
+                                    elif pname == 'text' and 'query' in kwargs:
+                                        args[pname] = kwargs['query']
+                                    elif pname == 'max_sentences' or pname == 'num_results':
+                                        args[pname] = kwargs.get(pname, 5)  # Default values
+                                
+                                logger.info(f"[Skill {name}] Calling with args: {args}")
+                                result = handler(args)
+                                logger.info(f"[Skill {name}] Success")
+                                return str(result)
+                            except Exception as e:
+                                logger.error(f"[Skill {name}] Error: {e}", exc_info=True)
+                                return f"Error: {str(e)}"
+                        
+                        # Build annotations
+                        annotations = {}
+                        for pname in param_names:
+                            ptype = sig.parameters[pname].annotation or str
+                            annotations[pname] = ptype
+                        annotations['return'] = str
+                        multi_param_tool.__annotations__ = annotations
+                        return multi_param_tool, name, desc
+                
+                tool_func, tool_name, tool_desc = make_skill_tool(skill_handler, skill_name, skill_desc, skill_params, sig)
+                
+                # Create LangChain StructuredTool
+                tool = StructuredTool.from_function(
+                    func=tool_func,
+                    name=tool_name,
+                    description=tool_desc
+                )
+                tools.append(tool)
+                logger.info(f"[Deep Agent Tool] ✅ Created tool: {tool_name}")
+                
+            except Exception as e:
+                logger.error(f"[Deep Agent Tool] ❌ Failed to convert skill {skill.name}: {e}", exc_info=True)
+        
+        logger.info(f"[Deep Agent] Total tools ready: {len(tools)}")
+        
+        # Create Deep Agent with system prompt from agent persona
+        system_prompt = agent.persona.to_system_prompt()
+        
+        on_thought_callback(ThoughtStep(
+            step_type="thought",
+            content="🔧 Setting up Deep Agent tools and reasoning framework...",
+            timestamp=datetime.utcnow().isoformat()
+        ))
+        
+        deep_agent = create_deep_agent(
+            model=langchain_model,
+            tools=tools,
+            system_prompt=system_prompt,
+        )
+        
+        on_thought_callback(ThoughtStep(
+            step_type="thought",
+            content="💭 Beginning advanced planning and reasoning...",
+            timestamp=datetime.utcnow().isoformat()
+        ))
+        
+        # Run the deep agent
+        logger.info(f"[Deep Agent] Invoking with task: {task[:100]}")
+        result = deep_agent.invoke({
+            "messages": [{"role": "user", "content": task}]
+        })
+        
+        logger.info(f"[Deep Agent] Result type: {type(result)}, keys: {result.keys() if isinstance(result, dict) else 'N/A'}")
+        completed_at = datetime.utcnow().isoformat()
+        
+        # Extract result from the message history - handle LangChain message objects
+        output = ""
+        if isinstance(result, dict):
+            messages_list = result.get("messages", [])
+            # Find the last message with actual content (skip empty messages)
+            for msg in reversed(messages_list):
+                # Handle LangChain BaseMessage objects
+                if hasattr(msg, 'content'):
+                    content = msg.content
+                    if content and isinstance(content, str) and content.strip():
+                        output = content.strip()
+                        break
+                # Handle dict format
+                elif isinstance(msg, dict):
+                    content = msg.get('content', '')
+                    if content and isinstance(content, str) and content.strip():
+                        output = content.strip()
+                        break
+            
+            # If still no output, try to get the entire result summary
+            if not output:
+                # Extract from tool calls or other parts
+                if "output" in result:
+                    output = str(result["output"])[:1000]
+                else:
+                    output = f"Deep Agent reasoning completed. Messages: {len(messages_list)} messages processed."
+        else:
+            output = str(result)[:500]
+        
+        # Stream intermediate results
+        on_thought_callback(ThoughtStep(
+            step_type="thought",
+            content=f"📊 Analyzing results...",
+            timestamp=datetime.utcnow().isoformat()
+        ))
+        
+        
+        on_thought_callback(ThoughtStep(
+            step_type="thought",
+            content=f"✨ Processing Deep Agent output...",
+            timestamp=datetime.utcnow().isoformat()
+        ))
+        
+        on_thought_callback(ThoughtStep(
+            step_type="reflection",
+            content=f"✅ Deep Agent Complete: {output[:200]}",
+            timestamp=datetime.utcnow().isoformat()
+        ))
+        
+        # Check for files created in data/files directory
+        files_created = []
+        try:
+            files_dir = Path(__file__).parent / "data" / "files"
+            if files_dir.exists():
+                for file_path in files_dir.rglob("*"):
+                    if file_path.is_file():
+                        # Get relative path for display
+                        try:
+                            rel_path = file_path.relative_to(Path(__file__).parent)
+                            files_created.append(str(rel_path))
+                            logger.info(f"[Deep Agent] Found created file: {rel_path}")
+                        except ValueError:
+                            pass
+        except Exception as e:
+            logger.warning(f"Failed to scan for created files: {e}")
+        
+        return AgentTask(
+            id=str(uuid.uuid4()),
+            description=task,
+            result=output,
+            error=None,
+            status="completed",
+            started_at=started_at,
+            completed_at=completed_at,
+            steps=[
+                ThoughtStep(
+                    step_type="reflection",
+                    content=f"Deep Agent Output:\n{output}",
+                    timestamp=completed_at
+                )
+            ],
+            metadata={"files_created": files_created} if files_created else {}
+        )
+    
+    except Exception as e:
+        logger.error(f"Deep agent execution error: {e}", exc_info=True)
+        completed_at = datetime.utcnow().isoformat()
+        
+        on_thought_callback(ThoughtStep(
+            step_type="thought",
+            content=f"❌ Deep Agent Error: {str(e)}",
+            timestamp=completed_at
+        ))
+        
+        return AgentTask(
+            id=str(uuid.uuid4()),
+            description=task,
+            result=None,
+            error=str(e),
+            status="failed",
+            started_at=started_at,
+            completed_at=completed_at,
+            steps=[]
+        )
+
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -226,7 +544,12 @@ async def create_agent(req: CreateAgentRequest):
         raise HTTPException(400, "Provide either 'template' or 'persona'")
     
     agent = Agent(persona=persona)
+    agent.is_deep_agent = req.is_deep_agent or False
     agents[agent.id] = agent
+    
+    # Save persona with deep agent flag
+    persona_data = persona.to_dict()
+    persona_data['is_deep_agent'] = agent.is_deep_agent
     save_agent_persona(persona)
     
     return {
@@ -287,6 +610,24 @@ async def reset_agent(agent_id: str):
     return {"success": True, "message": "Session reset"}
 
 
+@app.put("/api/agents/{agent_id}/deep-agent")
+async def toggle_deep_agent(agent_id: str, enable: bool = True):
+    """Toggle deep agent mode (LangChain advanced features) for an agent."""
+    agent = agents.get(agent_id)
+    if not agent:
+        raise HTTPException(404, f"Agent '{agent_id}' not found")
+    
+    agent.is_deep_agent = enable
+    save_agent_persona(agent.persona)
+    
+    status = "enabled" if enable else "disabled"
+    return {
+        "success": True,
+        "agent": agent.to_dict(),
+        "message": f"Deep agent mode {status} for '{agent.persona.name}'"
+    }
+
+
 # ─── Chat & Tasks ─────────────────────────────────────────────────────────────
 
 @app.post("/api/chat")
@@ -316,22 +657,50 @@ async def run_task(req: TaskRequest, background_tasks: BackgroundTasks):
     
     async def run_and_broadcast():
         import concurrent.futures
+        import time
         step_queue: asyncio.Queue = asyncio.Queue()
         
+        # Track last thought time to throttle streaming
+        last_thought_time = [time.time()]
+        
         def on_thought(step: ThoughtStep):
-            # Thread-safe: put step into async queue
-            loop.call_soon_threadsafe(step_queue.put_nowait, step.to_dict())
+            # Thread-safe: put step into async queue with minimal throttling
+            # This allows thoughts to stream more smoothly
+            try:
+                loop.call_soon_threadsafe(step_queue.put_nowait, step.to_dict())
+                # Small sleep to allow UI to catch up
+                time.sleep(0.05)
+            except Exception as e:
+                logger.warning(f"Failed to queue thought: {e}")
         
         agent.on_thought(on_thought)
         
-        # Run CPU-bound agent.run() in a thread pool so it doesn't block the event loop
+        # Run CPU-bound agent execution in a thread pool
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        agent_future = loop.run_in_executor(executor, agent.run, req.task, req.max_iterations)
+        
+        # Check if we should use deep agent mode
+        # Use deep agent if: (1) explicitly requested via use_deep_agent flag OR (2) agent has is_deep_agent=True
+        use_deep = req.use_deep_agent or agent.is_deep_agent
+        
+        if use_deep:
+            # Use Deep Agents SDK for advanced reasoning
+            agent_future = loop.run_in_executor(
+                executor, 
+                _run_deep_agent, 
+                agent, 
+                req.task, 
+                req.max_iterations,
+                on_thought
+            )
+        else:
+            # Use standard ReAct loop
+            agent_future = loop.run_in_executor(executor, agent.run, req.task, req.max_iterations)
         
         # Drain the step queue while the agent is running, streaming steps via WebSocket
+        # Use shorter timeout to catch more frequent updates
         while not agent_future.done():
             try:
-                step_dict = await asyncio.wait_for(step_queue.get(), timeout=0.1)
+                step_dict = await asyncio.wait_for(step_queue.get(), timeout=0.05)
                 await manager.send(req.agent_id, {
                     "type": "thought_step",
                     "task_id": task_id,
@@ -339,11 +708,14 @@ async def run_task(req: TaskRequest, background_tasks: BackgroundTasks):
                 })
             except asyncio.TimeoutError:
                 continue
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Queue drain error: {e}")
                 break
         
-        # Drain any remaining steps
-        while not step_queue.empty():
+        # Drain any remaining steps with more aggressive waiting
+        max_retries = 100
+        retry_count = 0
+        while not step_queue.empty() and retry_count < max_retries:
             try:
                 step_dict = step_queue.get_nowait()
                 await manager.send(req.agent_id, {
@@ -352,7 +724,9 @@ async def run_task(req: TaskRequest, background_tasks: BackgroundTasks):
                     "step": step_dict
                 })
             except Exception:
-                break
+                retry_count += 1
+                await asyncio.sleep(0.01)
+                continue
         
         # Get the completed task
         try:
@@ -443,6 +817,79 @@ async def remove_task(task_id: str):
     if not delete_task(task_id):
         raise HTTPException(404, f"Task '{task_id}' not found")
     return {"success": True}
+
+
+@app.get("/api/files/download")
+async def download_file(path: str):
+    """Download a file from the data/files directory."""
+    # Security: ensure the path is within data/files/
+    files_dir = Path(__file__).parent / "data" / "files"
+    
+    # Normalize the path to prevent directory traversal attacks
+    requested_path = Path(path)
+    if requested_path.is_absolute():
+        # If absolute path is provided, make it relative to project root
+        try:
+            requested_path = requested_path.relative_to(Path(__file__).parent)
+        except ValueError:
+            raise HTTPException(400, "Invalid file path")
+    
+    # Construct full file path
+    file_path = Path(__file__).parent / requested_path
+    
+    # Security check: ensure resolved path is within allowed directories
+    try:
+        file_path = file_path.resolve()
+        allowed_dirs = [
+            (Path(__file__).parent / "data" / "files").resolve(),
+            (Path(__file__).parent / "data").resolve(),
+        ]
+        if not any(str(file_path).startswith(str(allowed_dir)) for allowed_dir in allowed_dirs):
+            raise HTTPException(403, "Access denied")
+    except Exception:
+        raise HTTPException(400, "Invalid file path")
+    
+    # Check if file exists
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, f"File not found: {path}")
+    
+    # Return the file
+    return FileResponse(
+        path=str(file_path),
+        filename=file_path.name,
+        media_type='application/octet-stream'
+    )
+
+
+@app.get("/api/files/list")
+async def list_files():
+    """List all files in the data/files directory."""
+    files_dir = Path(__file__).parent / "data" / "files"
+    files_dir.mkdir(parents=True, exist_ok=True)
+    
+    files_list = []
+    for file_path in files_dir.rglob("*"):
+        if file_path.is_file():
+            # Get file stats
+            stat = file_path.stat()
+            relative_path = file_path.relative_to(Path(__file__).parent)
+            
+            files_list.append({
+                "name": file_path.name,
+                "path": str(relative_path).replace("\\", "/"),
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "extension": file_path.suffix.lower()
+            })
+    
+    # Sort by modified time (newest first)
+    files_list.sort(key=lambda x: x["modified"], reverse=True)
+    
+    return {
+        "files": files_list,
+        "count": len(files_list),
+        "total_size": sum(f["size"] for f in files_list)
+    }
 
 
 # ─── Memory & Knowledge ───────────────────────────────────────────────────────
@@ -912,29 +1359,6 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str):
         await manager.disconnect(websocket, agent_id)
 
 
-# ─── Multi-Agent Crew ─────────────────────────────────────────────────────────
-
-@app.post("/api/crew/run")
-async def run_crew(req: CrewRunRequest):
-    """Run an autonomous task using a multi-agent Crew."""
-    crew_agents = [agents[a_id] for a_id in req.agent_ids if a_id in agents]
-    if len(crew_agents) < 2:
-        raise HTTPException(400, "Crew requires at least 2 active agents")
-    
-    crew = Crew(name="Ad-hoc Crew", agents=crew_agents)
-    
-    # We will just run it in a thread executor
-    loop = asyncio.get_event_loop()
-    import concurrent.futures
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    
-    try:
-        run_obj = await loop.run_in_executor(executor, crew.run, req.task)
-        return {"success": True, "run": run_obj.to_dict()}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
 # ─── Agent Templates ──────────────────────────────────────────────────────────
 
 @app.post("/api/templates/create")
@@ -1003,199 +1427,18 @@ async def delete_template(template_id: str):
         return {"success": False, "error": str(e)}
 
 
-# ─── Crew Management ──────────────────────────────────────────────────────────
-
-@app.post("/api/crews/create")
-async def create_crew(req: CreateCrewRequest):
-    """Create a new crew."""
-    try:
-        crew_mgr = get_crew_manager()
-        crew = crew_mgr.create_crew(
-            name=req.name,
-            description=req.description,
-            organization=req.organization,
-            members=req.members,
-            communication_protocol=req.communication_protocol
-        )
-        return {
-            "success": True,
-            "crew": crew.to_dict(),
-            "message": f"Crew created: {req.name}"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.get("/api/crews")
-async def list_crews(organization: Optional[str] = None):
-    """List all crews (optionally filtered by organization)."""
-    try:
-        crew_mgr = get_crew_manager()
-        if organization:
-            crews = crew_mgr.get_crews_by_organization(organization)
-        else:
-            crews = crew_mgr.list_crews()
-        
-        return {
-            "success": True,
-            "crews": [c.to_dict() for c in crews],
-            "count": len(crews)
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.get("/api/crews/{crew_id}")
-async def get_crew(crew_id: str):
-    """Get a specific crew."""
-    try:
-        crew_mgr = get_crew_manager()
-        crew = crew_mgr.get_crew(crew_id)
-        if not crew:
-            raise HTTPException(404, "Crew not found")
-        return {
-            "success": True,
-            "crew": crew.to_dict()
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.post("/api/crews/{crew_id}/add-member")
-async def add_crew_member(crew_id: str, req: AddCrewMemberRequest):
-    """Add an agent to a crew."""
-    try:
-        crew_mgr = get_crew_manager()
-        success = crew_mgr.add_member_to_crew(
-            crew_id=crew_id,
-            agent_id=req.agent_id,
-            agent_name=req.agent_name,
-            role=req.role
-        )
-        if success:
-            crew = crew_mgr.get_crew(crew_id)
-            return {
-                "success": True,
-                "crew": crew.to_dict(),
-                "message": f"Added {req.agent_name} to crew"
-            }
-        return {"success": False, "error": "Failed to add member"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.post("/api/crews/{crew_id}/remove-member")
-async def remove_crew_member(crew_id: str, agent_id: str):
-    """Remove an agent from a crew."""
-    try:
-        crew_mgr = get_crew_manager()
-        success = crew_mgr.remove_member_from_crew(crew_id, agent_id)
-        if success:
-            crew = crew_mgr.get_crew(crew_id)
-            return {
-                "success": True,
-                "crew": crew.to_dict(),
-                "message": "Member removed from crew"
-            }
-        return {"success": False, "error": "Member not found"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.post("/api/crews/{crew_id}/update-member-status")
-async def update_member_status(crew_id: str, req: UpdateMemberStatusRequest):
-    """Update a crew member's status in real-time."""
-    try:
-        crew_mgr = get_crew_manager()
-        success = crew_mgr.update_member_status(
-            crew_id=crew_id,
-            agent_id=req.agent_id,
-            status=req.status,
-            current_task=req.current_task
-        )
-        if success:
-            return {
-                "success": True,
-                "message": f"Member status updated to: {req.status}"
-            }
-        return {"success": False, "error": "Member not found"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.delete("/api/crews/{crew_id}")
-async def delete_crew(crew_id: str):
-    """Delete a crew."""
-    try:
-        crew_mgr = get_crew_manager()
-        if crew_mgr.delete_crew(crew_id):
-            return {"success": True, "message": "Crew deleted"}
-        return {"success": False, "error": "Crew not found"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/crews/{crew_id}/execute")
-async def execute_crew_task(crew_id: str, req: TaskRequest):
-    """Execute a task autonomously using a crew."""
-    try:
-        crew_mgr = get_crew_manager()
-        crew = crew_mgr.get_crew(crew_id)
-        
-        if not crew:
-            raise HTTPException(404, f"Crew {crew_id} not found")
-        
-        # Get crew members
-        crew_agents = []
-        for member in crew.get('members', []):
-            agent_id = member.get('agent_id')
-            if agent_id and agent_id in agents:
-                crew_agents.append(agents[agent_id])
-        
-        if not crew_agents:
-            raise ValueError("No valid agents in crew")
-        
-        # Execute task with primary agent (coordinator)
-        primary_agent = crew_agents[0]
-        
-        # Add context about other team members
-        team_context = f"\n\nYou are part of a crew with these team members:\n"
-        for member in crew.get('members', []):
-            team_context += f"- {member.get('agent_name', 'Agent')} (Role: {member.get('role', 'contributor')})\n"
-        
-        task_with_context = f"{req.task}{team_context}"
-        
-        # Run the task
-        result = await primary_agent.run_task(task_with_context, max_iterations=req.max_iterations)
-        
-        return {
-            "success": True,
-            "crew_id": crew_id,
-            "task": req.task,
-            "agents_involved": len(crew_agents),
-            "agent_names": [m.get('agent_name', 'Agent') for m in crew.get('members', [])],
-            "output": result if isinstance(result, str) else str(result),
-            "message": "Task executed autonomously"
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Failed to execute crew task"
-        }
-
-
 # ─── Organizations ────────────────────────────────────────────────────────────
 
 @app.post("/api/organizations/create")
-async def create_organization(name: str, description: str = ""):
+async def create_organization(req: CreateOrganizationRequest):
     """Create a new organization."""
     try:
         crew_mgr = get_crew_manager()
-        org = crew_mgr.create_organization(name, description)
+        org = crew_mgr.create_organization(req.name, req.description)
         return {
             "success": True,
             "organization": org,
-            "message": f"Organization created: {name}"
+            "message": f"Organization created: {req.name}"
         }
     except Exception as e:
         return {"success": False, "error": str(e)}

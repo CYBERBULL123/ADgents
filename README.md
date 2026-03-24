@@ -40,8 +40,18 @@ pip install -e .
 
 **Set up environment:**
 ```bash
-cp .env.example .env
-# Edit .env and add your LLM API keys (Gemini, OpenAI, Anthropic, or use Ollama locally)
+# Create .env file with your LLM provider credentials
+cat > .env << 'EOF'
+# Choose one LLM provider:
+GEMINI_API_KEY=your-key-here
+GEMINI_MODEL=gemini-1.5-flash
+DEFAULT_LLM_PROVIDER=gemini
+
+# For other providers, see docs/packages/installation.md
+# OPENAI_API_KEY=sk-your-key
+# ANTHROPIC_API_KEY=sk-ant-your-key
+# OLLAMA_BASE_URL=http://localhost:11434
+EOF
 ```
 
 **Start the server:**

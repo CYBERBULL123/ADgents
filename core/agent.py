@@ -91,6 +91,7 @@ class Agent:
         self.llm = llm_router or LLM_ROUTER
         self.memory = memory or AgentMemory(self.persona.id)
         self.max_iterations = max_iterations
+        self.is_deep_agent = False  # LangChain deep agent flag
         
         self.status = AgentStatus.IDLE
         self.current_task: Optional[AgentTask] = None
@@ -319,6 +320,18 @@ I'll use my available tools to complete this task autonomously."""
                     result: SkillResult = self.skill_registry.execute(skill_name, **skill_args)
                     result_text = result.to_text()
                     
+                    # Track files created during task execution
+                    if skill_name == "file_write" and result.success:
+                        # Extract file path from the result message
+                        # Message format: "✅ Successfully wrote X characters to path/to/file"
+                        import re
+                        match = re.search(r'wrote \d+ characters to (.+)$', str(result.output))
+                        if match:
+                            file_path = match.group(1).strip()
+                            if "files_created" not in agent_task.metadata:
+                                agent_task.metadata["files_created"] = []
+                            agent_task.metadata["files_created"].append(file_path)
+                    
                     action_step.skill_result = result_text
                     agent_task.add_step(action_step)
                     
@@ -461,8 +474,11 @@ I'll use my available tools to complete this task autonomously."""
     
     def to_dict(self) -> Dict:
         return {
+            "id": self.id,
+            "name": self.name,
             "persona": self.persona.to_dict(),
             "status": self.status.value,
+            "is_deep_agent": self.is_deep_agent,
             "memory_stats": self.memory.stats(),
             "available_skills": [s.name for s in self.skill_registry.list()]
         }

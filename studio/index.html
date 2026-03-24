@@ -11,7 +11,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="/studio/style.css" />
     <!-- Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
@@ -98,9 +98,10 @@
             <span class="nav-icon">🔗</span>
             <span>MCP Server</span>
         </a>
-        <a class="nav-item" data-page="crews" onclick="navigate('crews');closeSidebar()">
-            <span class="nav-icon">🤝</span>
-            <span>Crew Manager</span>
+        <a class="nav-item" data-page="files" onclick="navigate('files');closeSidebar()">
+            <span class="nav-icon">📁</span>
+            <span>Files</span>
+            <span class="nav-badge" id="files-count-badge" style="display:none">0</span>
         </a>
 
         <div class="sidebar-section-label">Settings</div>
@@ -362,6 +363,18 @@
                                     <label>Available Skills</label>
                                     <div class="skills-checkbox-grid" id="build-skills-grid"></div>
                                 </div>
+
+                                <div class="form-group full-width" style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
+                                    <div style="display: flex; align-items: center; gap: 1rem; cursor: pointer;" onclick="toggleDeepAgent()">
+                                        <input type="checkbox" id="build-deep-agent" style="width: 20px; height: 20px; cursor: pointer;" />
+                                        <div style="flex: 1;">
+                                            <label style="font-weight: 600; color: var(--text-primary); cursor: pointer; margin: 0;">Enable Deep Agent (Advanced)</label>
+                                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.3rem;">
+                                                🧠 Unlock LangChain's advanced capabilities: ReAct loops, tool use, multi-step reasoning
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
                             <div class="builder-actions">
@@ -429,32 +442,85 @@
             <!-- ── TASKS ── -->
             <section class="page" id="page-tasks">
 
-                <!-- Control bar -->
-                <div class="task-control-bar">
-                    <div class="task-agent-group">
-                        <label class="task-label">Agent</label>
-                        <select id="task-agent-select" class="task-select">
-                            <option value="">— Select Agent —</option>
-                        </select>
-                    </div>
+                <!-- Task Mode Tabs -->
+                <div class="task-tabs-header" style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; border-bottom: 2px solid var(--border); padding-bottom: 0; position: relative; z-index: 10;">
+                    <button class="task-tab-btn active" id="tab-normal-agent" onclick="switchTaskTab('normal'); return false;" style="padding: 1rem 1.5rem; border: none; background: none; color: var(--text-primary); font-weight: 600; cursor: pointer; border-bottom: 3px solid var(--accent); transition: all 0.2s; pointer-events: auto;">
+                        ⚡ Normal Agent
+                    </button>
+                    <button class="task-tab-btn" id="tab-deep-agent" onclick="switchTaskTab('deep'); return false;" style="padding: 1rem 1.5rem; border: none; background: none; color: var(--text-secondary); font-weight: 600; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.2s; pointer-events: auto;">
+                        🧠 Deep Agent (Advanced)
+                    </button>
+                </div>
 
-                    <div class="task-input-group">
-                        <label class="task-label">Task Description</label>
-                        <textarea id="task-description" class="task-textarea"
-                            placeholder="Describe the task — e.g. Research the latest AI trends and write a summary report"
-                            rows="3"></textarea>
-                    </div>
-
-                    <div class="task-options-group">
-                        <div class="task-iter-row">
-                            <label class="task-label">Iterations: <strong id="max-iter-val">10</strong></label>
-                            <input type="range" id="task-max-iter" min="3" max="20" value="10"
-                                oninput="document.getElementById('max-iter-val').textContent=this.value" />
-                            <div class="task-iter-marks"><span>3</span><span>20</span></div>
+                <!-- Normal Agent Tab -->
+                <div class="task-mode-panel" id="panel-normal-agent" style="display: block;">
+                    <div class="task-control-bar">
+                        <div class="task-agent-group">
+                            <label class="task-label">Agent</label>
+                            <select id="task-agent-select" class="task-select">
+                                <option value="">— Select Agent —</option>
+                            </select>
                         </div>
-                        <button class="btn btn-primary task-run-btn" onclick="startTask()">
-                            ⚡ Run Autonomous Task
-                        </button>
+
+                        <div class="task-input-group">
+                            <label class="task-label">Task Description</label>
+                            <textarea id="task-description" class="task-textarea"
+                                placeholder="Describe the task — e.g. Research the latest AI trends and write a summary report"
+                                rows="3"></textarea>
+                        </div>
+
+                        <div class="task-options-group">
+                            <div class="task-iter-row">
+                                <label class="task-label">Iterations: <strong id="max-iter-val">10</strong></label>
+                                <input type="range" id="task-max-iter" min="3" max="20" value="10"
+                                    oninput="document.getElementById('max-iter-val').textContent=this.value" />
+                                <div class="task-iter-marks"><span>3</span><span>20</span></div>
+                            </div>
+                            <button class="btn btn-primary task-run-btn" onclick="startTask()">
+                                ⚡ Run Autonomous Task
+                            </button>
+                        </div>
+                    </div>
+                    <div style="padding: 1rem; background: rgba(59, 130, 246, 0.1); border-left: 3px solid #3b82f6; border-radius: 4px; margin-top: 1rem;">
+                        <div style="font-size: 0.85rem; color: var(--text-secondary);">
+                            <strong>Normal Agent Mode:</strong> Uses ADgents ReAct loop for reliable, straightforward task execution.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Deep Agent Tab -->
+                <div class="task-mode-panel" id="panel-deep-agent" style="display: none;">
+                    <div class="task-control-bar">
+                        <div class="task-agent-group">
+                            <label class="task-label">Select Deep Agent</label>
+                            <select id="task-deep-agent-select" class="task-select">
+                                <option value="">— Select Deep Agent (🧠) —</option>
+                            </select>
+                        </div>
+
+                        <div class="task-input-group">
+                            <label class="task-label">Task Description</label>
+                            <textarea id="task-deep-description" class="task-textarea"
+                                placeholder="Describe what you want — e.g. Research Python async/await, write a comprehensive tutorial with examples"
+                                rows="3"></textarea>
+                        </div>
+
+                        <div class="task-options-group">
+                            <div class="task-iter-row">
+                                <label class="task-label">Max Planning Steps: <strong id="max-deep-steps-val">10</strong></label>
+                                <input type="range" id="task-max-deep-steps" min="3" max="20" value="10"
+                                    oninput="document.getElementById('max-deep-steps-val').textContent=this.value" />
+                                <div class="task-iter-marks"><span>3</span><span>20</span></div>
+                            </div>
+                            <button class="btn btn-primary task-run-btn" onclick="startDeepTask()" style="background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);">
+                                🧠 Run Deep Agent Task
+                            </button>
+                        </div>
+                    </div>
+                    <div style="padding: 1rem; background: rgba(139, 92, 246, 0.1); border-left: 3px solid #8b5cf6; border-radius: 4px; margin-top: 1rem;">
+                        <div style="font-size: 0.85rem; color: var(--text-secondary);">
+                            <strong>🧠 Deep Agent Mode:</strong> Uses Deep Agents SDK for advanced planning, file management, and multi-step reasoning.
+                        </div>
                     </div>
                 </div>
 
@@ -474,8 +540,7 @@
                         <div class="task-empty-state">
                             <div class="task-empty-icon">⚡</div>
                             <div class="task-empty-title">Ready for Tasks</div>
-                            <div class="task-empty-desc">Select an agent, describe the task, then hit Run.<br>You'll see
-                                the agent's thoughts and actions here in real-time.</div>
+                            <div class="task-empty-desc">Choose a mode above (Normal or Deep Agent), select an agent, describe the task, then hit Run.<br>You'll see the agent's thoughts and actions here in real-time.</div>
                         </div>
                     </div>
                 </div>
@@ -591,6 +656,22 @@
                         </div>
                     </div>
                     <button class="btn btn-primary" onclick="teachAgent()">📚 Teach Agent</button>
+                </div>
+            </section>
+
+            <!-- ── FILES ── -->
+            <section class="page" id="page-files">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>📁 Files & Data</h3>
+                        <div class="header-actions">
+                            <input type="text" id="files-search" placeholder="🔍 Search files..." oninput="filterFiles(this.value)" />
+                            <button class="btn btn-secondary" onclick="refreshFiles()" title="Refresh file list">🔄 Refresh</button>
+                        </div>
+                    </div>
+                    <div id="files-grid" class="files-grid">
+                        <div class="empty-state-small">Loading files...</div>
+                    </div>
                 </div>
             </section>
 
@@ -745,9 +826,6 @@
             </section>
 
             <!-- ── CREW MANAGER ── -->
-            <section class="page" id="page-crews">
-                <iframe src="crews.html" style="width: 100%; height: 100vh; border: none; border-radius: 12px;"></iframe>
-            </section>
 
             <!-- ── SETTINGS ── -->
             <section class="page" id="page-settings">
@@ -954,7 +1032,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=9"></script>
+    <script src="/studio/app.js?v=9"></script>
 </body>
 
 </html>

@@ -34,6 +34,7 @@ function navigate(page) {
         history: ['Task History', 'Browse all past autonomous task runs'],
         memory: ['Memory', "View and manage agents' memories"],
         skills: ['Skills', 'Tools available to your agents'],
+        files: ['Files', 'Browse and download agent-created files'],
         mcp: ['MCP Server', 'Model Context Protocol Integration'],
         settings: ['Settings', 'Configure LLM providers and system'],
         docs: ['Documentation', 'Learn how to use ADgents']
@@ -48,6 +49,7 @@ function navigate(page) {
     if (page === 'chat') renderChatPicker();
     if (page === 'tasks') populateTaskAgentSelect();
     if (page === 'history') loadHistory();
+    if (page === 'files') loadFiles();
     if (page === 'memory') populateMemorySelects();
     if (page === 'skills') renderSkillsPage();
     if (page === 'mcp') loadMCPPage();
@@ -150,6 +152,9 @@ async function init() {
             overlay.style.transition = 'opacity 0.3s ease';
             setTimeout(() => overlay.style.display = 'none', 300);
         }
+        
+        // Set up task tab listeners
+        initTaskTabListeners();
         
         // Set up periodic API status checks
         setInterval(checkApiStatus, 10000);
@@ -361,6 +366,7 @@ function renderAgentsGrid(filter = '') {
         const traits = (a.persona.personality_traits || []).slice(0, 3);
         const skills = (a.available_skills || []).length;
         const mem = a.memory_stats?.episodic_memories || 0;
+        const isDeepAgent = a.is_deep_agent || false;
         return `
       <div class="agent-card" onclick="openAgentChat('${a.persona.id}')">
         <div class="agent-card-header">
@@ -369,7 +375,10 @@ function renderAgentsGrid(filter = '') {
             <div class="agent-name">${a.persona.name}</div>
             <div class="agent-role">${a.persona.role}</div>
           </div>
-          <span class="badge badge-${a.status === 'idle' ? 'green' : 'blue'}">${a.status}</span>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+            ${isDeepAgent ? '<span class="badge" style="background: rgba(139, 92, 246, 0.2); color: #8b5cf6; font-size: 0.7rem;">🧠 Deep</span>' : ''}
+            <span class="badge badge-${a.status === 'idle' ? 'green' : 'blue'}">${a.status}</span>
+          </div>
         </div>
         <div class="agent-traits">
           ${traits.map(t => `<span class="trait-chip">${t}</span>`).join('')}
@@ -391,6 +400,7 @@ function renderAgentsGrid(filter = '') {
         <div class="agent-actions" onclick="event.stopPropagation()">
           <button class="btn btn-ghost btn-xs" onclick="openAgentChat('${a.persona.id}')">💬 Chat</button>
           <button class="btn btn-ghost btn-xs" onclick="navigate('tasks')">⚡ Task</button>
+          <button class="btn btn-ghost btn-xs" onclick="toggleAgentDeepMode('${a.persona.id}', ${!isDeepAgent})" title="${isDeepAgent ? 'Disable' : 'Enable'} Deep Agent">${isDeepAgent ? '🧠 Deep' : '🔧 Regular'}</button>
           <button class="btn btn-ghost btn-xs" onclick="editAgent('${a.persona.id}')">✏️ Edit</button>
           <button class="btn btn-danger btn-xs" onclick="deleteAgent('${a.persona.id}')">🗑️</button>
         </div>
@@ -410,6 +420,23 @@ function deleteAgent(id) {
             toast('Agent deleted', 'info');
         } catch (e) { toast(e.message, 'error'); }
     });
+}
+
+async function toggleAgentDeepMode(agentId, enable) {
+    try {
+        const result = await api(`/agents/${agentId}/deep-agent?enable=${enable}`, 'PUT');
+        if (result.success) {
+            // Update the agent in state
+            state.agents[agentId] = result.agent;
+            renderAgentsGrid();
+            const mode = enable ? 'enabled 🧠' : 'disabled';
+            toast(`Deep Agent ${mode}`, 'success');
+        } else {
+            toast(result.error || 'Failed to toggle deep agent mode', 'error');
+        }
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
 }
 
 function openAgentChat(id) {
@@ -567,9 +594,15 @@ function resetBuilder() {
     document.getElementById('autonomy-val').textContent = 3;
     document.getElementById('build-creativity').value = 70;
     document.getElementById('creativity-val').textContent = 70;
+    document.getElementById('build-deep-agent').checked = false;
     state.selectedBuilderSkills = new Set();
     document.querySelectorAll('.skill-check-item').forEach(el => el.classList.remove('selected'));
     updatePreview();
+}
+
+function toggleDeepAgent() {
+    const checkbox = document.getElementById('build-deep-agent');
+    checkbox.checked = !checkbox.checked;
 }
 
 async function createAgent() {
@@ -578,6 +611,8 @@ async function createAgent() {
 
     if (!name) { toast('Please enter an agent name', 'error'); return; }
     if (!role) { toast('Please enter a role/title', 'error'); return; }
+
+    const isDeepAgent = document.getElementById('build-deep-agent')?.checked || false;
 
     const persona = {
         name,
@@ -605,9 +640,9 @@ async function createAgent() {
             }
             toast(`✨ ${name} updated successfully!`, 'success');
         } else {
-            const result = await api('/agents', 'POST', { persona });
-            state.agents[result.agent.persona.id] = result.agent;
-            toast(`✨ ${name} is ready!`, 'success');
+            const result = await api('/agents', 'POST', { persona, is_deep_agent: isDeepAgent });
+            state.agents[result.agent.id] = result.agent;
+            toast(`✨ ${name} is ready!${isDeepAgent ? ' 🧠 (Deep Agent powered by LangChain)' : ''}`, 'success');
         }
         
         updateAgentCount();
@@ -804,12 +839,93 @@ async function resetChatSession() {
 }
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
+// ─── Task Execution (Normal & Deep Agent) ─────────────────────────────────
+
+function initTaskTabListeners() {
+    console.log('[DEBUG] Initializing task tab listeners...');
+    const normalTab = document.getElementById('tab-normal-agent');
+    const deepTab = document.getElementById('tab-deep-agent');
+    
+    if (normalTab) {
+        normalTab.addEventListener('click', (e) => {
+            console.log('[DEBUG] Normal tab clicked');
+            e.preventDefault();
+            switchTaskTab('normal');
+        });
+    } else {
+        console.error('[ERROR] Normal tab button not found');
+    }
+    
+    if (deepTab) {
+        deepTab.addEventListener('click', (e) => {
+            console.log('[DEBUG] Deep tab clicked');
+            e.preventDefault();
+            switchTaskTab('deep');
+        });
+    } else {
+        console.error('[ERROR] Deep tab button not found');
+    }
+}
+
+function switchTaskTab(mode) {
+    console.log('[DEBUG] switchTaskTab called with mode:', mode);
+    
+    const normalPanel = document.getElementById('panel-normal-agent');
+    const deepPanel = document.getElementById('panel-deep-agent');
+    const normalTab = document.getElementById('tab-normal-agent');
+    const deepTab = document.getElementById('tab-deep-agent');
+    
+    if (!normalPanel || !deepPanel || !normalTab || !deepTab) {
+        console.error('[ERROR] One or more elements not found');
+        console.error('normalPanel:', normalPanel, 'deepPanel:', deepPanel, 'normalTab:', normalTab, 'deepTab:', deepTab);
+        return;
+    }
+    
+    if (mode === 'normal') {
+        normalPanel.style.display = 'block';
+        deepPanel.style.display = 'none';
+        normalTab.classList.add('active');
+        normalTab.style.borderBottomColor = 'var(--accent)';
+        normalTab.style.color = 'var(--text-primary)';
+        deepTab.classList.remove('active');
+        deepTab.style.borderBottomColor = 'transparent';
+        deepTab.style.color = 'var(--text-secondary)';
+        console.log('[DEBUG] Switched to Normal Agent tab');
+    } else if (mode === 'deep') {
+        normalPanel.style.display = 'none';
+        deepPanel.style.display = 'block';
+        normalTab.classList.remove('active');
+        normalTab.style.borderBottomColor = 'transparent';
+        normalTab.style.color = 'var(--text-secondary)';
+        deepTab.classList.add('active');
+        deepTab.style.borderBottomColor = '#8b5cf6';
+        deepTab.style.color = 'var(--text-primary)';
+        console.log('[DEBUG] Switched to Deep Agent tab');
+    }
+    clearTaskFeed();
+}
+
 function populateTaskAgentSelect() {
-    const sel = document.getElementById('task-agent-select');
-    if (!sel) return;
-    const agents = Object.values(state.agents);
-    sel.innerHTML = '<option value="">— Select Agent —</option>' +
-        agents.map(a => `<option value="${a.persona.id}">${a.persona.avatar} ${a.persona.name} (${a.persona.role})</option>`).join('');
+    const selNormal = document.getElementById('task-agent-select');
+    const selDeep = document.getElementById('task-deep-agent-select');
+    
+    // For normal agents - show all agents
+    if (selNormal) {
+        const agents = Object.values(state.agents);
+        selNormal.innerHTML = '<option value="">— Select Agent —</option>' +
+            agents.map(a => `<option value="${a.persona.id}">${a.persona.avatar} ${a.persona.name} (${a.persona.role})</option>`).join('');
+    }
+    
+    // For deep agents - only show agents with is_deep_agent=true
+    if (selDeep) {
+        const deepAgents = Object.values(state.agents).filter(a => a.is_deep_agent === true);
+        if (deepAgents.length === 0) {
+            selDeep.innerHTML = '<option value="">— No Deep Agents Available —</option><option value="">Create one in Builder with "Enable Deep Agent"</option>';
+        } else {
+            selDeep.innerHTML = '<option value="">— Select Deep Agent —</option>' +
+                deepAgents.map(a => `<option value="${a.persona.id}">🧠 ${a.persona.avatar} ${a.persona.name}</option>`).join('');
+        }
+    }
 }
 
 async function startTask() {
@@ -836,9 +952,54 @@ async function startTask() {
     try {
         const res = await api('/tasks', 'POST', { agent_id: agentId, task: taskDesc, max_iterations: maxIter });
         state.pendingTaskId = res.task_id;
-        toast(`Task started for ${state.agents[agentId]?.persona?.name}`, 'success');
+        toast(`⚡ Normal Agent Task started for ${state.agents[agentId]?.persona?.name}`, 'success');
         setTimeout(() => setTaskRunning(false, agentForTask?.persona?.name), 30000);
     } catch (e) { toast(e.message, 'error'); }
+}
+
+async function startDeepTask() {
+    const agentId = document.getElementById('task-deep-agent-select')?.value;
+    const taskDesc = document.getElementById('task-deep-description')?.value?.trim();
+    const maxSteps = parseInt(document.getElementById('task-max-deep-steps')?.value || 10);
+
+    if (!agentId) { toast('Select a Deep Agent', 'error'); return; }
+    if (!taskDesc) { toast('Enter a task description', 'error'); return; }
+
+    const agentForTask = state.agents[agentId];
+    setTaskRunning(true, agentForTask?.persona?.name);
+
+    // Clear steps
+    const stepsEl = document.getElementById('task-steps');
+    stepsEl.innerHTML = '<div class="task-step thought"><div class="step-header"><span class="step-type">🚀</span><span class="step-type thought">🧠 Starting Deep Agent Task...</span></div><div class="step-content">' + escapeHtml(taskDesc) + '</div></div>';
+
+    // Connect WebSocket for real-time steps
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        connectWebSocket(agentId);
+        await new Promise(r => setTimeout(r, 300)); // Let WS connect
+    }
+
+    try {
+        // For deep agents, send a special flag to enable deep agent mode
+        const res = await api('/tasks', 'POST', { 
+            agent_id: agentId, 
+            task: taskDesc, 
+            max_iterations: maxSteps,
+            use_deep_agent: true  // Flag to use deep agent execution
+        });
+        state.pendingTaskId = res.task_id;
+        toast(`🧠 Deep Agent Task started for ${state.agents[agentId]?.persona?.name}`, 'success');
+        setTimeout(() => setTaskRunning(false, agentForTask?.persona?.name), 60000);
+    } catch (e) { toast(e.message, 'error'); }
+}
+
+// Helper function to convert file paths in text to download links
+function convertFilePathsToLinks(text) {
+    // Match patterns like "to data/files/filename.txt" or "to data\files\filename.txt"
+    const filePathPattern = /(to|in)\s+([\w\/\\.-]+\.(txt|md|json|csv|log|py|js|html|css|xml|yaml|yml))/gi;
+    return text.replace(filePathPattern, (match, prefix, filePath) => {
+        const encodedPath = encodeURIComponent(filePath.replace(/\\/g, '/'));
+        return `${prefix} <a href="/api/files/download?path=${encodedPath}" download style="color:#10b981;text-decoration:underline;font-weight:600;cursor:pointer" title="Click to download">${filePath}</a>`;
+    });
 }
 
 function addTaskStep(step) {
@@ -856,12 +1017,23 @@ function addTaskStep(step) {
     if (step.skill_used) {
         bodyHtml += `<span class="step-skill-badge">🔧 ${escapeHtml(step.skill_used)}</span><br>`;
     }
-    const stepMd = step.step_type === 'thought' || step.step_type === 'reflection'
-        ? renderMarkdown(step.content || '')
-        : escapeHtml(step.content || '');
-    bodyHtml += `<div class="step-content md-content">${stepMd}</div>`;
+    
+    // Render step content
+    let stepContent = step.content || '';
+    if (step.step_type === 'thought' || step.step_type === 'reflection') {
+        bodyHtml += `<div class="step-content md-content">${renderMarkdown(stepContent)}</div>`;
+    } else {
+        // For observations/actions, convert file paths to download links
+        const escapedContent = escapeHtml(stepContent);
+        const contentWithLinks = convertFilePathsToLinks(escapedContent);
+        bodyHtml += `<div class="step-content md-content">${contentWithLinks}</div>`;
+    }
+    
     if (step.skill_result) {
-        bodyHtml += `<div class="step-result-box">${escapeHtml(step.skill_result.substring(0, 300))}${step.skill_result.length > 300 ? '…' : ''}</div>`;
+        // Convert file paths to download links in skill results
+        const resultText = escapeHtml(step.skill_result.substring(0, 300));
+        const resultWithLinks = convertFilePathsToLinks(resultText);
+        bodyHtml += `<div class="step-result-box">${resultWithLinks}${step.skill_result.length > 300 ? '…' : ''}</div>`;
     }
 
     div.innerHTML = `
@@ -976,6 +1148,179 @@ async function teachAgent() {
 
         if (document.getElementById('memory-agent-select')?.value === agentId) loadMemory();
     } catch (e) { toast(e.message, 'error'); }
+}
+
+// ─── Files ────────────────────────────────────────────────────────────────────
+let allFiles = [];
+
+async function loadFiles() {
+    try {
+        const data = await api('/files/list');
+        allFiles = data.files || [];
+        renderFilesGrid(allFiles);
+        
+        // Update badge
+        const badge = document.getElementById('files-count-badge');
+        if (badge) {
+            if (allFiles.length > 0) {
+                badge.textContent = allFiles.length;
+                badge.style.display = '';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+    } catch (e) {
+        console.error('Failed to load files:', e);
+        const grid = document.getElementById('files-grid');
+        if (grid) grid.innerHTML = '<div class="empty-state-small">Failed to load files</div>';
+    }
+}
+
+async function refreshFiles() {
+    toast('Refreshing files...', 'info');
+    await loadFiles();
+    toast('Files refreshed! 📁', 'success');
+}
+
+function filterFiles(query) {
+    if (!query || query.trim() === '') {
+        renderFilesGrid(allFiles);
+        return;
+    }
+    
+    const q = query.toLowerCase();
+    const filtered = allFiles.filter(f => 
+        f.name.toLowerCase().includes(q) || 
+        f.path.toLowerCase().includes(q)
+    );
+    renderFilesGrid(filtered);
+}
+
+function renderFilesGrid(files) {
+    const grid = document.getElementById('files-grid');
+    if (!grid) return;
+    
+    if (files.length === 0) {
+        grid.innerHTML = '<div class="empty-state-small">No files found</div>';
+        return;
+    }
+    
+    // Format file size
+    const formatSize = (bytes) => {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+    };
+    
+    // Get file icon based on extension
+    const getFileIcon = (ext) => {
+        const icons = {
+            '.txt': '📄', '.md': '📝', '.json': '🔧', '.csv': '📊',
+            '.log': '📋', '.py': '🐍', '.js': '💛', '.html': '🌐',
+            '.css': '🎨', '.xml': '📰', '.yaml': '⚙️', '.yml': '⚙️',
+            '.pdf': '📕', '.doc': '📘', '.docx': '📘'
+        };
+        return icons[ext] || '📄';
+    };
+    
+    // Format date
+    const formatDate = (isoString) => {
+        const date = new Date(isoString);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+        
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays < 7) return `${diffDays}d ago`;
+        return date.toLocaleDateString();
+    };
+    
+    grid.innerHTML = files.map(f => {
+        const encodedPath = encodeURIComponent(f.path);
+        const icon = getFileIcon(f.extension);
+        const canPreview = ['.txt', '.md', '.json', '.log', '.csv', '.html', '.css', '.js', '.py', '.xml', '.yaml', '.yml'].includes(f.extension);
+        
+        return `
+        <div class="file-card">
+            <div class="file-icon">${icon}</div>
+            <div class="file-info">
+                <div class="file-name">${escapeHtml(f.name)}</div>
+                <div class="file-meta">
+                    <span>${formatSize(f.size)}</span>
+                    <span>•</span>
+                    <span>${formatDate(f.modified)}</span>
+                </div>
+                <div class="file-path">${escapeHtml(f.path)}</div>
+            </div>
+            <div class="file-actions">
+                ${canPreview ? `<button class="btn btn-sm btn-secondary" onclick="previewFile('${encodedPath}', '${escapeHtml(f.name).replace(/'/g, "\\'")}', '${f.extension}')">👁️ View</button>` : ''}
+                <a href="/api/files/download?path=${encodedPath}" download class="btn btn-sm btn-primary">⬇️ Download</a>
+            </div>
+        </div>
+        `;
+    }).join('');
+}
+
+async function previewFile(encodedPath, fileName, extension) {
+    try {
+        const response = await fetch(`/api/files/download?path=${encodedPath}`);
+        if (!response.ok) throw new Error('Failed to load file');
+        
+        const text = await response.text();
+        
+        // Create modal
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+        modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+        
+        const maxLength = 50000;
+        const truncated = text.length > maxLength;
+        const displayText = truncated ? text.substring(0, maxLength) + '\n\n... [File truncated, download to see full content]' : text;
+        
+        modal.innerHTML = `
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);max-width:900px;max-height:80vh;width:90%;display:flex;flex-direction:column;box-shadow:var(--shadow);">
+                <div style="padding:1.5rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <h3 style="margin:0;font-size:1.1rem;">📄 ${escapeHtml(fileName)}</h3>
+                        <div style="color:var(--text-secondary);font-size:0.8rem;margin-top:0.25rem;">${text.length.toLocaleString()} characters${truncated ? ' (showing first ' + maxLength.toLocaleString() + ')' : ''}</div>
+                    </div>
+                    <button onclick="this.closest('.modal-overlay').remove()" class="btn btn-secondary" style="flex-shrink:0;margin-left:1rem;">✕ Close</button>
+                </div>
+                <div style="padding:1.5rem;overflow:auto;flex:1;">
+                    <pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--font-mono);font-size:0.85rem;line-height:1.6;background:var(--bg-input);padding:1rem;border-radius:var(--radius-sm);border:1px solid var(--border);">${escapeHtml(displayText)}</pre>
+                </div>
+                <div style="padding:1rem 1.5rem;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:0.75rem;">
+                    <button onclick="this.closest('.modal-overlay').remove()" class="btn btn-secondary">Close</button>
+                    <a href="/api/files/download?path=${encodedPath}" download class="btn btn-primary">⬇️ Download</a>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.remove();
+        });
+        
+        // Close on Escape key
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+        
+    } catch (e) {
+        toast('Failed to preview file: ' + e.message, 'error');
+    }
 }
 
 // ─── Skills ───────────────────────────────────────────────────────────────────
@@ -1562,6 +1907,48 @@ function handleTaskComplete(data) {
             ? result
             : '_No result text was returned. Check the Task Steps above for observations._';
         body.innerHTML = renderMarkdown(displayResult);
+        
+        // Display files created during task execution
+        if (task.metadata && task.metadata.files_created && task.metadata.files_created.length > 0) {
+            const filesSection = document.createElement('div');
+            filesSection.style.marginTop = '1.5rem';
+            filesSection.style.padding = '1rem';
+            filesSection.style.background = 'rgba(16,185,129,0.06)';
+            filesSection.style.border = '1px solid rgba(16,185,129,0.2)';
+            filesSection.style.borderRadius = '8px';
+            
+            const filesTitle = document.createElement('div');
+            filesTitle.style.fontWeight = '600';
+            filesTitle.style.marginBottom = '0.5rem';
+            filesTitle.style.color = 'var(--green)';
+            filesTitle.innerHTML = '📁 Files Created';
+            filesSection.appendChild(filesTitle);
+            
+            const filesList = document.createElement('ul');
+            filesList.style.listStyle = 'none';
+            filesList.style.padding = '0';
+            filesList.style.margin = '0';
+            
+            task.metadata.files_created.forEach(filePath => {
+                const fileItem = document.createElement('li');
+                fileItem.style.padding = '0.5rem';
+                fileItem.style.marginBottom = '0.25rem';
+                fileItem.style.background = 'rgba(16,185,129,0.08)';
+                fileItem.style.borderRadius = '4px';
+                fileItem.style.fontFamily = 'monospace';
+                fileItem.style.fontSize = '0.85rem';
+                fileItem.style.color = '#34d399';
+                
+                // Create download link
+                const encodedPath = encodeURIComponent(filePath.replace(/\\/g, '/'));
+                fileItem.innerHTML = `📄 <a href="/api/files/download?path=${encodedPath}" download style="color:#34d399;text-decoration:underline;cursor:pointer;font-weight:600" title="Click to download ${escapeHtml(filePath)}">${escapeHtml(filePath)}</a>`;
+                filesList.appendChild(fileItem);
+            });
+            
+            filesSection.appendChild(filesList);
+            body.appendChild(filesSection);
+        }
+        
         toast('Task completed! ✅', 'success');
     }
 
