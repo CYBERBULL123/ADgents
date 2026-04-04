@@ -20,6 +20,31 @@ from pydantic import BaseModel
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Load .env — works with or without python-dotenv installed
+def _load_env_file():
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(env_path)
+        return
+    except ImportError:
+        pass
+    # Fallback: parse .env manually
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, _, val = line.partition('=')
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = val
+
+_load_env_file()
+
 from core.agent import Agent, AgentFactory, AgentTask, ThoughtStep, AGENT_FACTORY
 from core.persona import Persona, PERSONA_TEMPLATES
 from core.skills import SKILL_REGISTRY, Skill
@@ -30,6 +55,8 @@ from core.agent_store import save_agent_persona, load_all_personas, delete_agent
 from core.task_db import save_task, list_tasks, get_task, delete_task, task_stats
 from core.a2a_protocol import A2AProtocolManager, get_a2a_manager, A2AMessage
 from core.mcp_server import MCPServer
+from core.crew_manager import get_crew_manager
+from core.google_adk_integration import ADKIntegration
 
 # ─── Logger Setup ─────────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
@@ -101,15 +128,38 @@ class CreateOrganizationRequest(BaseModel):
     description: str = ""
 
 class SendA2AMessageRequest(BaseModel):
+    crew_id: str
     from_agent: str
     to_agent: str
     message_type: str
     content: Dict[str, Any]
 
 class BroadcastA2AMessageRequest(BaseModel):
+    crew_id: str
     from_agent: str
-    message_type: str
+    message_type: str = "broadcast"
     content: Dict[str, Any]
+
+class CreateCrewRequest(BaseModel):
+    name: str
+    description: str = ""
+    organization: str = "default"
+    members: List[Dict[str, Any]] = []
+    communication_protocol: str = "a2a"
+
+class CreateADKAgentRequest(BaseModel):
+    name: str
+    description: str = ""
+    model: str = "gemini-2.0-flash"
+    instructions: str = ""
+    tools: List[str] = []
+
+class CreateADKWorkflowRequest(BaseModel):
+    name: str
+    workflow_type: str  # "sequential", "parallel", "loop"
+    agents: List[str] = []
+    condition: Optional[str] = None
+    max_iterations: Optional[int] = 10
 
 # ─── App Setup ────────────────────────────────────────────────────────────────
 
@@ -174,6 +224,9 @@ manager = ConnectionManager()
 agents: Dict[str, Agent] = {}
 for _p in load_all_personas():
     agents[_p.id] = Agent(persona=_p)
+
+# Initialize ADK Integration
+adk_integration = ADKIntegration()
 
 
 # ─── Deep Agent Execution ─────────────────────────────────────────────────────
@@ -1075,27 +1128,76 @@ async def llm_status():
     return LLM_ROUTER.status()
 
 
+@app.get("/api/llm/configured")
+async def get_configured_providers():
+    """Get which providers are configured in environment variables."""
+    import os
+    configured = {}
+    
+    # Check OpenAI
+    if os.getenv("OPENAI_API_KEY"):
+        configured["openai"] = {
+            "available": True,
+            "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            "from_env": True
+        }
+    
+    # Check Gemini
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+        configured["gemini"] = {
+            "available": True,
+            "model": os.getenv("GEMINI_MODEL", "gemini-1.5-flash"),
+            "from_env": True
+        }
+    
+    # Check Claude
+    if os.getenv("ANTHROPIC_API_KEY"):
+        configured["claude"] = {
+            "available": True,
+            "model": os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
+            "from_env": True
+        }
+    
+    # Ollama doesn't need API key
+    configured["ollama"] = {
+        "available": True,
+        "model": os.getenv("OLLAMA_MODEL", "llama2"),
+        "note": "Local - no API key needed",
+        "from_env": bool(os.getenv("OLLAMA_MODEL"))
+    }
+    
+    return {"success": True, "configured": configured}
+
+
 @app.post("/api/llm/configure")
 async def configure_llm(config: Dict[str, Any]):
-    """Configure LLM providers."""
+    """Configure LLM providers.
+    
+    If api_key is not provided, will use the key from environment variables (.env).
+    """
     provider = config.get("provider")
-    api_key = config.get("api_key")
+    api_key = config.get("api_key")  # Can be None - will use .env if not provided
     model = config.get("model")
     
     if not provider:
         raise HTTPException(400, "Provider name required")
     
     import os
+    
+    # Only override environment variable if new key is provided
     if api_key:
         if provider == "openai":
             os.environ["OPENAI_API_KEY"] = api_key
         elif provider == "gemini":
             os.environ["GEMINI_API_KEY"] = api_key
+            os.environ["GOOGLE_API_KEY"] = api_key  # Also set for ADK compatibility
         elif provider == "claude":
             os.environ["ANTHROPIC_API_KEY"] = api_key
     
-    # Reinitialize the router
+    # Reinitialize the router with the selected model
+    # API key defaults to None, which means providers will use environment variables
     from core.llm import OpenAIProvider, GeminiProvider, AnthropicProvider
+    
     if provider == "openai":
         LLM_ROUTER.register(OpenAIProvider(api_key=api_key, model=model or "gpt-4o-mini"))
         LLM_ROUTER.set_default("openai")
@@ -1107,6 +1209,99 @@ async def configure_llm(config: Dict[str, Any]):
         LLM_ROUTER.set_default("claude")
     
     return {"success": True, "status": LLM_ROUTER.status()}
+
+
+STATIC_MODELS = {
+    'openai': {
+        'provider': 'OpenAI', 'icon': '🔴',
+        'models': ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'],
+        'env_key': 'OPENAI_API_KEY'
+    },
+    'gemini': {
+        'provider': 'Google Gemini', 'icon': '🔵',
+        'models': ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro'],
+        'env_key': 'GEMINI_API_KEY'
+    },
+    'claude': {
+        'provider': 'Anthropic Claude', 'icon': '✨',
+        'models': ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229', 'claude-3-haiku-20240307'],
+        'env_key': 'ANTHROPIC_API_KEY'
+    },
+}
+
+@app.get("/api/llm/models")
+async def get_all_available_models():
+    """Get all available models for all providers.
+    Shows which providers are configured based on environment variables.
+    Models are listed for ALL providers, but marked as configured/unconfigured."""
+    providers = {}
+    
+    for key, info in STATIC_MODELS.items():
+        env_val = os.getenv(info['env_key'], '').strip()
+        is_configured = bool(env_val and env_val not in ('', 'your-anthropic-key-here', 'your-google-cloud-api-key-here'))
+        
+        providers[key] = {
+            'provider': info['provider'],
+            'icon': info['icon'],
+            'configured': is_configured,
+            'models': info['models']
+        }
+    
+    # Also check GOOGLE_API_KEY for gemini
+    if os.getenv('GOOGLE_API_KEY', '').strip() and os.getenv('GOOGLE_API_KEY', '').strip() not in ('your-google-cloud-api-key-here',):
+        providers['gemini']['configured'] = True
+    
+    return {
+        "success": True,
+        "providers": providers,
+        "total_models": sum(len(v['models']) for v in providers.values()),
+        "configured_count": sum(1 for v in providers.values() if v['configured'])
+    }
+
+@app.get("/api/llm/models/{provider}")
+async def get_provider_models(provider: str):
+    """Get models for a specific provider.
+    Returns all models for the provider regardless of configuration status."""
+    if provider not in STATIC_MODELS:
+        return {"success": False, "error": f"Unknown provider: {provider}"}
+    
+    info = STATIC_MODELS[provider]
+    env_val = os.getenv(info['env_key'], '').strip()
+    is_configured = bool(env_val and env_val not in ('', 'your-anthropic-key-here', 'your-google-cloud-api-key-here'))
+    
+    # Check GOOGLE_API_KEY for gemini
+    if provider == 'gemini' and os.getenv('GOOGLE_API_KEY', '').strip() and os.getenv('GOOGLE_API_KEY', '').strip() not in ('your-google-cloud-api-key-here',):
+        is_configured = True
+    
+    return {
+        "success": True,
+        "provider": info['provider'],
+        "models": info['models'],
+        "configured": is_configured,
+        "env_key": info['env_key']
+    }
+
+@app.get("/api/llm/env-status")  
+async def get_llm_env_status():
+    """Check what LLM providers are configured in environment variables.
+    Returns a simple view of what's set (without exposing actual keys)."""
+    return {
+        "success": True,
+        "providers": {
+            "openai": {
+                "configured": bool(os.getenv('OPENAI_API_KEY', '').strip()),
+                "icon": "🔴"
+            },
+            "gemini": {
+                "configured": bool(os.getenv('GEMINI_API_KEY', '').strip() or os.getenv('GOOGLE_API_KEY', '').strip()),
+                "icon": "🔵"
+            },
+            "claude": {
+                "configured": bool(os.getenv('ANTHROPIC_API_KEY', '').strip()),
+                "icon": "✨"
+            }
+        }
+    }
 
 
 # ─── Docs ─────────────────────────────────────────────────────────────────────
@@ -1176,8 +1371,27 @@ _mcp_config = {"mode": "stdio", "port": 8001}
 async def mcp_status():
     """Get MCP server status and available tools."""
     try:
-        tools_count = len(SKILL_REGISTRY._skills) if SKILL_REGISTRY and hasattr(SKILL_REGISTRY, '_skills') else 0
-        agents_count = len(agents) if agents else 0
+        # Get skills from registry
+        tool_names = []
+        
+        if SKILL_REGISTRY and hasattr(SKILL_REGISTRY, '_skills'):
+            try:
+                # Use dictionary keys as skill names (this is the correct way)
+                tool_names = list(SKILL_REGISTRY._skills.keys())
+            except Exception as e:
+                logger.warning(f"Failed to get skills from registry: {e}")
+        
+        # Get agents - extract names from agent objects
+        agent_names = []
+        if agents:
+            try:
+                agent_names = [a.persona.name for a in agents.values()]
+            except Exception as e:
+                logger.warning(f"Failed to get agent names: {e}")
+        
+        tools_count = len(tool_names)
+        agents_count = len(agent_names)
+        
         return {
             "success": True,
             "running": _mcp_server_running,
@@ -1185,10 +1399,18 @@ async def mcp_status():
             "version": "1.0.0",
             "supported_protocols": ["stdio", "sse"],
             "available_tools": tools_count,
+            "tool_names": tool_names,
             "available_agents": agents_count,
+            "agent_names": agent_names,
             "config": _mcp_config,
+            "capability": {
+                "has_tools": tools_count > 0,
+                "has_agents": agents_count > 0,
+                "ready_for_connection": True
+            }
         }
     except Exception as e:
+        logger.error(f"Error in mcp_status: {e}")
         return {"success": False, "error": str(e), "running": False}
 
 @app.get("/api/mcp/tools")
@@ -1568,6 +1790,169 @@ async def get_agent_communications(agent_id: str):
             "communications": comms,
             "count": len(comms)
         }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# ─── Crew Management Endpoints ────────────────────────────────────────────────
+
+@app.post("/api/crews/create")
+async def create_crew(req: CreateCrewRequest):
+    """Create a new crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        crew = crew_mgr.create_crew(
+            name=req.name,
+            description=req.description,
+            organization=req.organization,
+            members=req.members,
+            communication_protocol=req.communication_protocol
+        )
+        return {
+            "success": True,
+            "crew": crew.to_dict(),
+            "message": f"Crew created: {req.name}"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/crews")
+async def list_crews():
+    """List all crews."""
+    try:
+        crew_mgr = get_crew_manager()
+        crews = crew_mgr.list_crews()
+        return {
+            "success": True,
+            "crews": [c.to_dict() for c in crews],
+            "count": len(crews)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/crews/{crew_id}")
+async def get_crew(crew_id: str):
+    """Get a specific crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        crew = crew_mgr.get_crew(crew_id)
+        if not crew:
+            raise HTTPException(404, "Crew not found")
+        return {
+            "success": True,
+            "crew": crew.to_dict()
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/crews/{crew_id}/members")
+async def add_crew_member(crew_id: str, member_data: Dict[str, Any]):
+    """Add a member to a crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        success = crew_mgr.add_member_to_crew(
+            crew_id=crew_id,
+            agent_id=member_data["agent_id"],
+            agent_name=member_data["agent_name"],
+            role=member_data.get("role", "contributor")
+        )
+        if not success:
+            return {"success": False, "error": "Failed to add member"}
+        return {"success": True, "message": "Member added to crew"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.delete("/api/crews/{crew_id}")
+async def delete_crew(crew_id: str):
+    """Delete a crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        success = crew_mgr.delete_crew(crew_id)
+        if not success:
+            return {"success": False, "error": "Crew not found"}
+        return {"success": True, "message": "Crew deleted successfully"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# ─── Google ADK Endpoints ────────────────────────────────────────────────────
+
+@app.post("/api/adk/agents/create")
+async def create_adk_agent(req: CreateADKAgentRequest):
+    """Create a Google ADK agent."""
+    try:
+        agent = adk_integration.create_llm_agent(
+            name=req.name,
+            description=req.description,
+            model=req.model,
+            instructions=req.instructions,
+            tools=req.tools
+        )
+        return {
+            "success": True,
+            "agent": agent.get_agent_info(),
+            "message": f"ADK Agent created: {req.name}"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/adk/agents")
+async def list_adk_agents():
+    """List all ADK agents."""
+    try:
+        agents = adk_integration.list_agents()
+        return {
+            "success": True,
+            "agents": agents,
+            "count": len(agents)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/adk/workflows/create")
+async def create_adk_workflow(req: CreateADKWorkflowRequest):
+    """Create an ADK workflow."""
+    try:
+        if req.workflow_type == "sequential":
+            workflow = adk_integration.create_sequential_workflow(
+                name=req.name,
+                agents_sequence=req.agents
+            )
+        elif req.workflow_type == "parallel":
+            workflow = adk_integration.create_parallel_workflow(
+                name=req.name,
+                agents_list=req.agents
+            )
+        elif req.workflow_type == "loop":
+            workflow = adk_integration.create_loop_workflow(
+                name=req.name,
+                agent=req.agents[0] if req.agents else "",
+                condition=req.condition,
+                max_iterations=req.max_iterations
+            )
+        else:
+            return {"success": False, "error": "Invalid workflow type"}
+
+        return {
+            "success": True,
+            "workflow": workflow,
+            "message": f"ADK Workflow created: {req.name}"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/adk/agents/{agent_name}/run")
+async def run_adk_agent(agent_name: str, request: Dict[str, Any]):
+    """Run an ADK agent."""
+    try:
+        user_input = request.get("input", "")
+        result = await adk_integration.run_agent(agent_name, user_input)
+        return result
     except Exception as e:
         return {"success": False, "error": str(e)}
 

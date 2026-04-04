@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import logging
 import json
 import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -226,10 +227,58 @@ class ADKIntegration:
         self.agent_tools: Dict[str, List[Callable]] = {}
         self.adk_available = GOOGLE_ADK_AVAILABLE
         
+        # Create ADK directory for persistence
+        self.adk_dir = Path(__file__).parent.parent / "data" / "adk"
+        self.adk_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Load existing agents
+        self._load_agents()
+        
         if not self.api_key and GOOGLE_ADK_AVAILABLE:
             logger.warning("⚠️  GOOGLE_API_KEY environment variable not set")
         
         logger.info("✓ ADK Integration initialized")
+
+    def _load_agents(self):
+        """Load ADK agents from disk."""
+        for agent_file in self.adk_dir.glob("*.json"):
+            try:
+                with open(agent_file, "r", encoding="utf-8") as f:
+                    agent_data = json.load(f)
+                
+                # Recreate agent from saved config
+                config = ADKConfig(**agent_data["config"])
+                agent = GoogleADKAgent(config, tools=agent_data.get("tools", []))
+                self.agents[config.name] = agent
+                self.agent_tools[config.name] = agent_data.get("tools", [])
+                
+                logger.info(f"✓ Loaded ADK agent: {config.name}")
+            except Exception as e:
+                logger.error(f"Error loading ADK agent {agent_file}: {e}")
+
+    def _save_agent(self, agent: GoogleADKAgent):
+        """Save ADK agent to disk."""
+        try:
+            agent_data = {
+                "config": {
+                    "name": agent.config.name,
+                    "description": agent.config.description,
+                    "model": agent.config.model,
+                    "api_key": agent.config.api_key,
+                    "instructions": agent.config.instructions,
+                    "temperature": agent.config.temperature,
+                    "max_tokens": agent.config.max_tokens
+                },
+                "tools": self.agent_tools.get(agent.config.name, [])
+            }
+            
+            agent_file = self.adk_dir / f"{agent.config.name}.json"
+            with open(agent_file, "w", encoding="utf-8") as f:
+                json.dump(agent_data, f, indent=2)
+                
+            logger.info(f"✓ Saved ADK agent: {agent.config.name}")
+        except Exception as e:
+            logger.error(f"Error saving ADK agent {agent.config.name}: {e}")
 
     def create_llm_agent(self, name: str, description: str, 
                         model: str = "gemini-2.0-flash",
@@ -262,6 +311,9 @@ class ADKIntegration:
         agent = GoogleADKAgent(config, tools=tools or [])
         self.agents[name] = agent
         self.agent_tools[name] = tools or []
+        
+        # Save agent to disk
+        self._save_agent(agent)
         
         logger.info(f"✓ Created LLM Agent: {name} (model: {model})")
         return agent

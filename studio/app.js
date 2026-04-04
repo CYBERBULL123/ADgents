@@ -36,6 +36,8 @@ function navigate(page) {
         skills: ['Skills', 'Tools available to your agents'],
         files: ['Files', 'Browse and download agent-created files'],
         mcp: ['MCP Server', 'Model Context Protocol Integration'],
+        adk: ['ADK Workflows', 'Google ADK agent orchestration'],
+        crews: ['Crew Collaboration', 'Multi-agent team coordination'],
         settings: ['Settings', 'Configure LLM providers and system'],
         docs: ['Documentation', 'Learn how to use ADgents']
     };
@@ -48,18 +50,29 @@ function navigate(page) {
     if (page === 'agents') renderAgentsGrid();
     if (page === 'chat') renderChatPicker();
     if (page === 'tasks') populateTaskAgentSelect();
+    if (page === 'adk') loadADKPage();
+    if (page === 'crews') loadCrewsPage();
     if (page === 'history') loadHistory();
     if (page === 'files') loadFiles();
     if (page === 'memory') populateMemorySelects();
     if (page === 'skills') renderSkillsPage();
     if (page === 'mcp') loadMCPPage();
     if (page === 'settings') {
-        loadProviderStatus();
         updateDBConnectionFields();
+
         // Load saved preferences
         document.getElementById('org-name').value = localStorage.getItem('org_name') || '';
         document.getElementById('memory-type').value = localStorage.getItem('memory_type') || 'multi_tier';
         document.getElementById('auto-save').checked = localStorage.getItem('auto_save') === 'true';
+
+        // Restore saved provider dropdown (model will be restored after models load)
+        const savedProvider = localStorage.getItem('llm_provider');
+        if (savedProvider) {
+            document.getElementById('llm-provider').value = savedProvider;
+        }
+
+        // Load providers info banner + all models (restore selection happens after load)
+        loadConfiguredProviders();
     }
     if (page === 'builder') initBuilder();
     if (page === 'dashboard') updateDashboard();
@@ -84,8 +97,23 @@ async function api(path, method = 'GET', body = null, timeout = 10000) {
         clearTimeout(timeoutId);
         
         if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || `HTTP ${res.status}`);
+            let errorMsg = `HTTP ${res.status}`;
+            try {
+                const err = await res.json();
+                // Handle Pydantic validation errors
+                if (err.detail) {
+                    if (Array.isArray(err.detail)) {
+                        errorMsg = err.detail.map(d => `${d.loc?.join('.')}: ${d.msg}`).join('; ');
+                    } else {
+                        errorMsg = err.detail;
+                    }
+                } else if (err.error) {
+                    errorMsg = err.error;
+                }
+            } catch (parseErr) {
+                // Response wasn't JSON, keep default message
+            }
+            throw new Error(errorMsg);
         }
         return res.json();
     } catch (e) {
@@ -1348,30 +1376,185 @@ function renderSkillsPage() {
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
-async function loadProviderStatus() {
+async function loadAllAvailableModels() {
+    // Load all models from all providers and populate dropdown
     try {
-        const status = await api('/llm/status');
-        const el = document.getElementById('provider-status-list');
-        if (!el) return;
-
-        const statusItems = Object.entries(status).map(([name, info]) => `
-            <div class="status-item" style="padding: 0.75rem; background: var(--bg-card-hover); border-radius: var(--radius-sm); border-left: 3px solid ${info.available ? 'var(--accent)' : 'var(--text-muted)'};">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-weight: 600; text-transform: capitalize;">${name}</span>
-                    <div style="display: flex; gap: 0.5rem; align-items: center;">
-                        <span class="badge badge-${info.available ? 'green' : 'red'}">
-                            ${info.available ? '✅' : '❌'} ${info.available ? 'Available' : 'Not configured'}
-                        </span>
-                        ${info.default ? '<span class="badge badge-yellow">⭐ Default</span>' : ''}
-                    </div>
-                </div>
-            </div>
-        `).join('');
+        console.log('🔄 Loading all available models from all providers...');
+        const modelHint = document.getElementById('model-hint');
+        const modelSelect = document.getElementById('llm-model');
         
-        el.innerHTML = statusItems || '<div class="empty-state-small">No providers configured yet</div>';
-    } catch (e) { 
-        console.error('Load provider status:', e);
+        if (modelHint) modelHint.textContent = '⏳ Fetching models from all providers...';
+        if (modelSelect) modelSelect.innerHTML = '<option value="">⏳ Loading models...</option>';
+        
+        console.log('📡 API Call: GET /llm/models');
+        const response = await api('/llm/models', 'GET', null, 30000);
+        
+        console.log('✅ API Response:', response);
+        
+        if (response && response.success && response.providers) {
+            console.log('📦 Providers received:', Object.keys(response.providers));
+            
+            const providers = response.providers;
+            const options = [];
+            let modelCount = 0;
+            let configuredCount = 0;
+            
+            // Organize by provider - show ALL providers, not just configured ones
+            for (const [providerKey, providerData] of Object.entries(providers)) {
+                console.log(`🔍 Checking provider: ${providerKey}`, providerData);
+                
+                if (providerData.models && providerData.models.length > 0) {
+                    const icon = providerData.icon || '⚙️';
+                    const providerLabel = providerData.provider || providerKey;
+                    const configStatus = providerData.configured ? '✅' : '⚠️';
+                    const configText = providerData.configured ? '' : ' (Not Configured)';
+                    
+                    options.push(`<optgroup label="${configStatus} ${icon} ${providerLabel}${configText}">`);
+                    
+                    providerData.models.forEach(model => {
+                        // Format: "model|provider-key" for auto-selection
+                        const displayName = model.length > 50 ? model.substring(0, 47) + '...' : model;
+                        options.push(`<option value="${model}|${providerKey}">${displayName}</option>`);
+                        modelCount++;
+                        if (providerData.configured) configuredCount++;
+                    });
+                    
+                    options.push('</optgroup>');
+                }
+            }
+            
+            if (modelCount > 0) {
+                modelSelect.innerHTML = `<option value="">-- Select a model --</option>` + options.join('');
+                if (configuredCount > 0) {
+                    modelHint.textContent = `✅ ${modelCount} models available (${configuredCount} from configured providers)`;
+                } else {
+                    modelHint.textContent = `⚠️ ${modelCount} models available. Configure API keys in .env to enable providers.`;
+                }
+                console.log(`✨ SUCCESS: Loaded ${modelCount} models`);
+
+                // Restore saved model selection now that options are populated
+                const savedProvider = localStorage.getItem('llm_provider');
+                const savedModel = localStorage.getItem('llm_model');
+                if (savedProvider && savedModel) {
+                    for (let option of modelSelect.options) {
+                        if (option.value && option.value.startsWith(savedModel + '|' + savedProvider)) {
+                            modelSelect.value = option.value;
+                            break;
+                        }
+                    }
+                    // If exact provider match not found, try any provider
+                    if (!modelSelect.value || modelSelect.value === '') {
+                        for (let option of modelSelect.options) {
+                            if (option.value && option.value.startsWith(savedModel + '|')) {
+                                modelSelect.value = option.value;
+                                break;
+                            }
+                        }
+                    }
+                    if (modelSelect.value) {
+                        const providerNames = {
+                            'openai': '🔴 OpenAI', 'gemini': '🔵 Google Gemini',
+                            'claude': '✨ Anthropic Claude', 'ollama': '🦙 Ollama (Local)'
+                        };
+                        updateCurrentSelectionDisplay(savedProvider, savedModel, providerNames[savedProvider] || savedProvider);
+                    }
+                }
+            } else {
+                modelSelect.innerHTML = '<option value="">❌ No models available</option>';
+                modelHint.textContent = '❌ No models found. This should not happen!';
+                console.warn('⚠️ No models found in response');
+            }
+        } else {
+            console.error('❌ Invalid response format:', response);
+            modelSelect.innerHTML = '<option value="">❌ Error loading models</option>';
+            modelHint.textContent = `❌ Error: ${response?.error || 'Invalid response'}`;
+        }
+    } catch (e) {
+        console.error('❌ Error loading all models:', e);
+        const modelSelect = document.getElementById('llm-model');
+        const modelHint = document.getElementById('model-hint');
+        if (modelSelect) modelSelect.innerHTML = '<option value="">❌ Error loading models</option>';
+        if (modelHint) modelHint.textContent = `❌ Error: ${e.message}`;
     }
+}
+
+function onModelSelected() {
+    // Handle model selection - auto-set provider based on selected model
+    const modelSelect = document.getElementById('llm-model');
+    const providerSelect = document.getElementById('llm-provider');
+    const selectedValue = modelSelect?.value;
+    
+    if (!selectedValue || selectedValue === '') {
+        return;
+    }
+    
+    // Extract provider info from the option value
+    // Format: "model-name|provider-key"
+    const parts = selectedValue.split('|');
+    if (parts.length === 2) {
+        const [modelName, providerKey] = parts;
+        console.log(`Model selected: ${modelName} from provider: ${providerKey}`);
+        
+        // Auto-set the provider
+        if (providerSelect) {
+            providerSelect.value = providerKey;
+            console.log(`Auto-selected provider: ${providerKey}`);
+        }
+        
+        // Update the model input to show just the model name
+        modelSelect.value = selectedValue;
+        
+        // Update current selection display
+        updateCurrentSelectionDisplay(providerKey, modelName);
+    }
+}
+
+function updateCurrentSelectionDisplay(provider, model, providerDisplayName) {
+    const banner = document.getElementById('llm-active-banner');
+    if (!banner) return;
+    const label = providerDisplayName || {'openai':'🔴 OpenAI','gemini':'🔵 Gemini','claude':'✨ Claude','ollama':'🦙 Ollama'}[provider] || provider;
+    banner.textContent = `✅ Active: ${label} — ${model}`;
+    banner.style.display = 'block';
+}
+
+async function loadEnvironmentStatus() {
+    /**Load and display which LLM providers are configured in environment variables.*/
+    try {
+        const statusEl = document.getElementById('llm-env-status');
+        if (!statusEl) return;
+        
+        const response = await api('/llm/env-status');
+        
+        if (response.success && response.providers) {
+            const html = Object.entries(response.providers).map(([key, info]) => {
+                const status = info.configured ? '✅ Configured' : '❌ Not Configured';
+                const statusColor = info.configured ? 'color: #22c55e;' : 'color: #ef4444;';
+                return `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: rgba(0,0,0,0.2); border-radius: 0.25rem;">
+                        <span>${info.icon} <strong>${key.charAt(0).toUpperCase() + key.slice(1)}</strong></span>
+                        <span style="${statusColor} font-weight: 500;">${status}</span>
+                    </div>
+                `;
+            }).join('');
+            
+            statusEl.innerHTML = html;
+        } else {
+            statusEl.innerHTML = '<div style="color: var(--text-secondary);">Unable to load environment status</div>';
+        }
+    } catch (e) {
+        console.error('Error loading environment status:', e);
+        const statusEl = document.getElementById('llm-env-status');
+        if (statusEl) {
+            statusEl.innerHTML = '<div style="color: var(--text-secondary);">Error loading status</div>';
+        }
+    }
+}
+
+async function loadConfiguredProviders() {
+    // Load environment status first
+    await loadEnvironmentStatus();
+    // Then load all available models
+    await loadAllAvailableModels();
 }
 
 function updateDBConnectionFields() {
@@ -1413,18 +1596,68 @@ function updateDBConnectionFields() {
     }
 }
 
+async function updateProviderSelection() {
+    // When user manually changes provider, filter models to that provider
+    const provider = document.getElementById('llm-provider')?.value?.trim();
+    const modelSelect = document.getElementById('llm-model');
+    const modelHint = document.getElementById('model-hint');
+    
+    console.log('Provider changed to:', provider);
+    
+    if (!provider || provider === '') {
+        // Show all models again
+        await loadAllAvailableModels();
+        return;
+    }
+    
+    try {
+        if (modelHint) modelHint.textContent = `Loading ${provider} models...`;
+        if (modelSelect) modelSelect.innerHTML = '<option value="">Loading...</option>';
+        
+        const response = await api(`/llm/models/${provider}`);
+        
+        if (response.success && response.models) {
+            console.log(`Loaded ${response.models.length} ${provider} models`);
+            const options = [`<option value="">-- Select a model from ${provider} --</option>`];
+            
+            response.models.forEach(model => {
+                const displayName = model.length > 50 ? model.substring(0, 47) + '...' : model;
+                options.push(`<option value="${model}|${provider}">${displayName}</option>`);
+            });
+            
+            if (modelSelect) modelSelect.innerHTML = options.join('');
+            if (modelHint) modelHint.textContent = `${response.models.length} ${response.provider} models available`;
+        } else {
+            if (modelSelect) modelSelect.innerHTML = '<option value="">Failed to load models</option>';
+            if (modelHint) modelHint.textContent = response.error || 'Failed to load models';
+        }
+    } catch (e) {
+        console.error('Error updating models:', e);
+        if (modelSelect) modelSelect.innerHTML = '<option value="">Error loading models</option>';
+        if (modelHint) modelHint.textContent = `Error: ${e.message}`;
+    }
+}
+
 async function saveLLMConfig() {
     const provider = document.getElementById('llm-provider')?.value?.trim();
     const api_key = document.getElementById('llm-api-key')?.value?.trim();
-    const model = document.getElementById('llm-model')?.value?.trim();
+    const modelSelect = document.getElementById('llm-model');
+    let model = modelSelect?.value?.trim();
+    
+    // Extract model name if it includes provider info (format: "model|provider")
+    if (model && model.includes('|')) {
+        model = model.split('|')[0];
+    }
 
     if (!provider || provider === '') {
         toast('Select a provider', 'error');
         return;
     }
 
-    if (!api_key && provider !== 'ollama') {
-        toast('Enter an API key (not needed for Ollama)', 'error');
+    // API key optional — .env is used if blank
+
+    if (!model || model === '') {
+        toast('Select a model', 'error');
         return;
     }
 
@@ -1432,10 +1665,29 @@ async function saveLLMConfig() {
     statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
 
     try {
-        await api('/llm/configure', 'POST', { provider, api_key: api_key || null, model: model || undefined });
-        statusEl.innerHTML = '<span class="badge badge-green">✅ Configuration saved successfully</span>';
-        toast(`${provider} configured!`, 'success');
-        setTimeout(() => loadProviderStatus(), 500);
+        // Only send API key if provided (non-empty)
+        const payload = { provider, model };
+        if (api_key) {
+            payload.api_key = api_key;
+        }
+        
+        await api('/llm/configure', 'POST', payload);
+        
+        // Save to localStorage (only the model selection, not the key)
+        localStorage.setItem('llm_provider', provider);
+        localStorage.setItem('llm_model', model);
+        
+        // Update current selection display
+        const providerNames = {
+            'openai': '🔴 OpenAI',
+            'gemini': '🔵 Google Gemini',
+            'claude': '✨ Anthropic Claude',
+            'ollama': '🦙 Ollama (Local)'
+        };
+        updateCurrentSelectionDisplay(provider, model, providerNames[provider] || provider);
+        
+        statusEl.innerHTML = '<span class="badge badge-green">✅ Saved</span>';
+        toast(`${provider} → ${model} saved!`, 'success');
     } catch (e) {
         statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
         toast(e.message, 'error');
@@ -2263,87 +2515,911 @@ async function loadDocContent(name) {
 
 async function loadMCPPage() {
     try {
+        console.log('[MCP] Loading MCP page...');
+        
         // Load MCP status
         const statusData = await api('/mcp/status');
+        console.log('[MCP] Status data received:', statusData);
+        
+        // Check if all elements exist
         const statusDiv = document.getElementById('mcp-status');
+        const startBtn = document.getElementById('btn-start-mcp');
+        const stopBtn = document.getElementById('btn-stop-mcp');
+        const toolsList = document.getElementById('mcp-tools-list');
+        const agentsList = document.getElementById('mcp-agents-list');
+        
+        // Safely check if page exists
+        if (!statusDiv || !startBtn || !stopBtn || !toolsList || !agentsList) {
+            console.warn('[MCP] Some elements missing from DOM, page may not be loaded yet');
+            toast('MCP page not fully loaded yet', 'info');
+            return;
+        }
         
         if (statusData.success) {
-            statusDiv.innerHTML = `
-                <div><strong>Server Name:</strong> ${escapeHtml(statusData.server_name)}</div>
-                <div><strong>Version:</strong> ${escapeHtml(statusData.version)}</div>
-                <div><strong>Status:</strong> <span class="badge ${statusData.running ? 'badge-green' : 'badge-red'}">${statusData.running ? 'Running' : 'Stopped'}</span></div>
-                <div><strong>Protocols:</strong> ${statusData.supported_protocols.join(', ')}</div>
-                <div><strong>Available Tools:</strong> ${statusData.available_tools}</div>
-                <div><strong>Registered Agents:</strong> ${statusData.available_agents}</div>
-            `;
-        }
-        
-        // Load MCP tools
-        const toolsData = await api('/mcp/tools');
-        const toolsList = document.getElementById('mcp-tools-list');
-        const toolsCount = document.getElementById('mcp-tools-count');
-        
-        if (toolsData.success && toolsData.tools.length > 0) {
-            toolsCount.textContent = toolsData.tools.length;
-            toolsList.innerHTML = toolsData.tools.map(tool => {
-                const paramsCount = tool.input_schema.properties ? Object.keys(tool.input_schema.properties).length : 0;
-                return `
-                <div>
-                    <div>🔧 ${escapeHtml(tool.name)}</div>
-                    <div>${escapeHtml(tool.description)}</div>
-                    <div>
-                        <strong>Schema:</strong> ${tool.input_schema.type} • 
-                        <strong>Parameters:</strong> ${paramsCount}
+            const isRunning = statusData.running || false;
+            const toolCount = statusData.available_tools || 0;
+            const agentCount = statusData.available_agents || 0;
+            
+            // Update status display
+            if (statusDiv) {
+                statusDiv.innerHTML = `
+                    <div style="display: grid; gap: 0.75rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Status</span>
+                            <span class="badge ${isRunning ? 'badge-green' : 'badge-orange'}">${isRunning ? '🟢 Running' : '🟡 Stopped'}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Available Tools</span>
+                            <strong>${toolCount} skill${toolCount !== 1 ? 's' : ''}</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Agents Available</span>
+                            <strong>${agentCount} agent${agentCount !== 1 ? 's' : ''}</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Mode</span>
+                            <strong>${statusData.config?.mode || 'stdio'}</strong>
+                        </div>
                     </div>
-                </div>
-            `}).join('');
+                `;
+            }
+            
+            // Update button visibility
+            if (startBtn && stopBtn) {
+                if (isRunning) {
+                    startBtn.style.display = 'none';
+                    stopBtn.style.display = 'inline-block';
+                } else {
+                    startBtn.style.display = 'inline-block';
+                    stopBtn.style.display = 'none';
+                }
+            }
         } else {
-            toolsList.innerHTML = '<div class="empty-state-small">No tools available yet</div>';
+            console.warn('[MCP] API returned error:', statusData.error);
+            if (statusDiv) {
+                statusDiv.innerHTML = `<div style="color: var(--text-secondary);">⚠️ Error: ${statusData.error || 'Unable to load status'}</div>`;
+            }
         }
+        
+        // Load and display tools
+        if (toolsList) {
+            if (statusData.tool_names && statusData.tool_names.length > 0) {
+                toolsList.innerHTML = statusData.tool_names.map(name => `
+                    <div style="padding: 0.75rem; background: var(--bg-input); border-radius: var(--radius-sm);">
+                        <div style="font-weight: 500; color: var(--text-primary);">🔧 ${escapeHtml(name)}</div>
+                    </div>
+                `).join('');
+            } else {
+                toolsList.innerHTML = '<div style="padding: 1rem; text-align: center; color: var(--text-secondary);">No skills available as tools</div>';
+            }
+        }
+        
+        // Load and display agents
+        if (agentsList) {
+            if (statusData.agent_names && statusData.agent_names.length > 0) {
+                agentsList.innerHTML = statusData.agent_names.map(name => `
+                    <div style="padding: 0.75rem; background: var(--bg-input); border-radius: var(--radius-sm); display: flex; align-items: center;">
+                        <div style="font-weight: 500; color: var(--text-primary);">🤖 ${escapeHtml(name)}</div>
+                    </div>
+                `).join('');
+            } else {
+                agentsList.innerHTML = '<div style="padding: 1rem; text-align: center; color: var(--text-secondary);">No agents configured</div>';
+            }
+        }
+        
+        console.log('[MCP] Page load complete');
     } catch (e) {
+        console.error('[MCP] Failed to load MCP data:', e);
         toast('Failed to load MCP data: ' + e.message, 'error');
     }
 }
 
-function saveMCPConfig() {
-    const mode = document.getElementById('mcp-mode').value;
-    const port = document.getElementById('mcp-port').value;
+async function saveMCPConfig() {
+    const modeEl = document.getElementById('mcp-mode');
+    const portEl = document.getElementById('mcp-port');
     
-    api('/mcp/configure', 'POST', { mode, port })
-        .then(data => {
-            if (data.success) {
-                toast('MCP configuration saved successfully', 'success');
-            } else {
-                toast('Failed to save configuration: ' + data.error, 'error');
-            }
-        })
-        .catch(e => toast('Failed to save MCP config: ' + e.message, 'error'));
+    if (!modeEl || !portEl) {
+        toast('Configuration elements missing from page', 'error');
+        return;
+    }
+    
+    const mode = modeEl.value;
+    const port = portEl.value;
+    
+    try {
+        const result = await api('/mcp/configure', 'POST', { mode, port });
+        if (result.success) {
+            toast('MCP configuration saved!', 'success');
+        } else {
+            toast('Failed to save configuration', 'error');
+        }
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
 }
 
-function toggleMCPServer() {
-    const toggle = document.getElementById('mcp-toggle-text');
-    const isRunning = toggle.textContent === 'Stop Server';
-    const endpoint = isRunning ? '/mcp/stop' : '/mcp/start';
-    
-    api(endpoint, 'POST', {})
-        .then(data => {
-            if (data.success) {
-                if (data.running) {
-                    toggle.textContent = 'Stop Server';
-                    toast('MCP Server started successfully', 'success');
-                } else {
-                    toggle.textContent = 'Start Server';
-                    toast('MCP Server stopped', 'success');
-                }
-                // Refresh status
-                loadMCPData();
-            } else {
-                toast('Error: ' + data.error, 'error');
-            }
-        })
-        .catch(e => {
-            toast('Failed to toggle MCP server: ' + e.message, 'error');
-        });
+async function startMCPServer() {
+    try {
+        const result = await api('/mcp/start', 'POST', {});
+        if (result.success) {
+            toast('MCP Server started!', 'success');
+            await loadMCPPage();
+        } else {
+            toast('Failed to start server: ' + result.error, 'error');
+        }
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
+}
+
+async function stopMCPServer() {
+    try {
+        const result = await api('/mcp/stop', 'POST', {});
+        if (result.success) {
+            toast('MCP Server stopped', 'success');
+            await loadMCPPage();
+        } else {
+            toast('Failed to stop server: ' + result.error, 'error');
+        }
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
 }
 
 window.addEventListener('DOMContentLoaded', init);
+
+// ─── ADK Workflows ───────────────────────────────────────────────────────────
+
+async function loadADKPage() {
+    try {
+        // Load Gemini models for ADK agent creation (prefer Gemini, but show all available)
+        const modelSelect = document.getElementById('adk-agent-model');
+        if (modelSelect) {
+            modelSelect.innerHTML = '<option value="">⏳ Loading models...</option>';
+            
+            try {
+                // Try to get Gemini models specifically
+                const modelsResponse = await api('/llm/models/gemini');
+                if (modelsResponse.success && modelsResponse.models && modelsResponse.models.length > 0) {
+                    console.log('✓ Loaded Gemini models for ADK:', modelsResponse.models);
+                    modelSelect.innerHTML = '<option value="">-- Select a Gemini model --</option>';
+                    modelsResponse.models.forEach(model => {
+                        modelSelect.innerHTML += `<option value="${model}">${model}</option>`;
+                    });
+                } else {
+                    // Fallback if Gemini not available
+                    console.warn('Gemini models not available, using fallback');
+                    modelSelect.innerHTML = '<option value="gemini-1.5-flash" selected>Gemini 1.5 Flash</option><option value="gemini-1.5-pro">Gemini 1.5 Pro</option>';
+                }
+            } catch (e) {
+                console.error('Failed to load Gemini models:', e);
+                modelSelect.innerHTML = '<option value="gemini-1.5-flash" selected>Gemini 1.5 Flash (Default)</option>';
+            }
+        }
+        
+        // Load ADK agents
+        const agentsData = await api('/adk/agents');
+        renderADKAgentsList(agentsData.agents || []);
+        
+        // Populate test agent select
+        const testSelect = document.getElementById('test-agent-select');
+        if (testSelect) {
+            testSelect.innerHTML = '<option value="">Choose an agent...</option>';
+            (agentsData.agents || []).forEach(agent => {
+                testSelect.innerHTML += `<option value="${agent.name}">${agent.name}</option>`;
+            });
+        }
+        
+        // Update workflow type change handler
+        const workflowTypeSelect = document.getElementById('workflow-type');
+        if (workflowTypeSelect) {
+            workflowTypeSelect.addEventListener('change', function() {
+                const type = this.value;
+                const loopGroup = document.getElementById('loop-condition-group');
+                const maxIterGroup = document.getElementById('max-iterations-group');
+                
+                if (type === 'loop') {
+                    loopGroup.style.display = 'block';
+                    maxIterGroup.style.display = 'block';
+                } else {
+                    loopGroup.style.display = 'none';
+                    maxIterGroup.style.display = 'none';
+                }
+            });
+        }
+        
+    } catch (e) {
+        console.error('Failed to load ADK page:', e);
+        toast('Failed to load ADK data', 'error');
+    }
+}
+
+function renderADKAgentsList(agents) {
+    const listEl = document.getElementById('adk-agents-list');
+    if (!agents.length) {
+        listEl.innerHTML = '<div class="empty-state"><div class="empty-icon">🤖</div><div class="empty-title">No ADK Agents</div><div class="empty-description">Create your first Google ADK agent to get started</div></div>';
+        return;
+    }
+    
+    listEl.innerHTML = agents.map(agent => `
+        <div class="agent-card">
+            <div class="agent-card-header">
+                <span class="agent-avatar">🤖</span>
+                <div class="agent-info">
+                    <div class="agent-name">${escapeHtml(agent.name)}</div>
+                    <div class="agent-model">${escapeHtml(agent.model)}</div>
+                </div>
+                <div class="agent-status">
+                    <span class="badge ${agent.status === 'initialized' ? 'badge-green' : 'badge-yellow'}">
+                        ${agent.status === 'initialized' ? '✅ Ready' : '⏳ ' + agent.status}
+                    </span>
+                </div>
+            </div>
+            <div class="agent-description">${escapeHtml(agent.description || 'No description')}</div>
+            <div class="agent-stats">
+                <span>🛠️ ${agent.tools_count || 0} tools</span>
+                <span>🔗 ${agent.adk_available ? 'ADK Available' : 'ADK Unavailable'}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function createADKAgent() {
+    const name = document.getElementById('adk-agent-name').value.trim();
+    const description = document.getElementById('adk-agent-description').value.trim();
+    const model = document.getElementById('adk-agent-model').value;
+    const instructions = document.getElementById('adk-agent-instructions').value.trim();
+    
+    if (!name) {
+        toast('Agent name is required', 'error');
+        return;
+    }
+    
+    if (!model || model === '') {
+        toast('Please select a model', 'error');
+        return;
+    }
+    
+    try {
+        const data = await api('/adk/agents/create', 'POST', {
+            name, description, model, instructions, tools: []
+        });
+        
+        if (data.success) {
+            toast('ADK Agent created successfully!', 'success');
+            // Clear form
+            document.getElementById('adk-agent-name').value = '';
+            document.getElementById('adk-agent-description').value.trim();
+            document.getElementById('adk-agent-instructions').value = '';
+            // Reload page
+            loadADKPage();
+        } else {
+            toast(data.error || 'Failed to create agent', 'error');
+        }
+    } catch (e) {
+        toast('Failed to create ADK agent: ' + e.message, 'error');
+    }
+}
+
+async function createADKWorkflow() {
+    const name = document.getElementById('workflow-name').value.trim();
+    const type = document.getElementById('workflow-type').value;
+    const agents = document.getElementById('workflow-agents').value.trim().split(',').map(a => a.trim()).filter(a => a);
+    const condition = document.getElementById('loop-condition').value.trim();
+    const maxIterations = parseInt(document.getElementById('max-iterations').value) || 10;
+    
+    if (!name) {
+        toast('Workflow name is required', 'error');
+        return;
+    }
+    
+    if (!agents.length) {
+        toast('At least one agent is required', 'error');
+        return;
+    }
+    
+    try {
+        const data = await api('/adk/workflows/create', 'POST', {
+            name, workflow_type: type, agents, condition, max_iterations: maxIterations
+        });
+        
+        if (data.success) {
+            toast('ADK Workflow created successfully!', 'success');
+            // Clear form
+            document.getElementById('workflow-name').value = '';
+            document.getElementById('workflow-agents').value = '';
+            document.getElementById('loop-condition').value = '';
+            document.getElementById('max-iterations').value = '10';
+        } else {
+            toast(data.error || 'Failed to create workflow', 'error');
+        }
+    } catch (e) {
+        toast('Failed to create ADK workflow: ' + e.message, 'error');
+    }
+}
+
+async function testADKAgent() {
+    const agentName = document.getElementById('test-agent-select').value;
+    const input = document.getElementById('test-agent-input').value.trim();
+    
+    if (!agentName) {
+        toast('Please select an agent', 'error');
+        return;
+    }
+    
+    if (!input) {
+        toast('Please enter input text', 'error');
+        return;
+    }
+    
+    const resultEl = document.getElementById('adk-test-result');
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = '<div style="text-align: center; color: var(--text-secondary);">⏳ Running agent...</div>';
+    
+    try {
+        const data = await api(`/adk/agents/${agentName}/run`, 'POST', { input });
+        
+        if (data.success) {
+            resultEl.innerHTML = `
+                <div style="margin-bottom: 1rem;">
+                    <strong>✅ Success</strong> - Model: ${escapeHtml(data.model)}, Agent: ${escapeHtml(data.agent_name)}
+                </div>
+                <div style="background: var(--bg-card-hover); padding: 1rem; border-radius: 8px; border: 1px solid var(--border);">
+                    ${renderMarkdown(data.output)}
+                </div>
+            `;
+        } else {
+            resultEl.innerHTML = `
+                <div style="margin-bottom: 1rem;">
+                    <strong style="color: var(--red);">❌ Error</strong>
+                </div>
+                <div style="background: rgba(239,68,68,0.1); padding: 1rem; border-radius: 8px; border: 1px solid rgba(239,68,68,0.3); color: var(--red);">
+                    ${escapeHtml(data.error)}
+                </div>
+            `;
+        }
+    } catch (e) {
+        resultEl.innerHTML = `
+            <div style="margin-bottom: 1rem;">
+                <strong style="color: var(--red);">❌ Network Error</strong>
+            </div>
+            <div style="background: rgba(239,68,68,0.1); padding: 1rem; border-radius: 8px; border: 1px solid rgba(239,68,68,0.3); color: var(--red);">
+                ${escapeHtml(e.message)}
+            </div>
+        `;
+    }
+}
+
+// ─── Crew Collaboration ──────────────────────────────────────────────────────
+
+async function loadCrewsPage() {
+    try {
+        // Load crews
+        const crewsData = await api('/crews');
+        renderCrewsList(crewsData.crews || []);
+        
+        // Load agents for member selection and crew creation
+        const agentsData = await api('/agents');
+        const agentSelects = ['member-agent-select'];
+        agentSelects.forEach(id => {
+            const select = document.getElementById(id);
+            if (select) {
+                select.innerHTML = '<option value="">Choose an agent...</option>';
+                (agentsData.agents || []).forEach(agent => {
+                    select.innerHTML += `<option value="${agent.id}">${agent.persona.avatar} ${agent.persona.name}</option>`;
+                });
+            }
+        });
+        
+        // Load agents for crew creation
+        const crewAgentsSelect = document.getElementById('crew-agents');
+        const crewAgentsWrapper = document.getElementById('crew-agents-wrapper');
+        if (crewAgentsSelect && crewAgentsWrapper) {
+            crewAgentsSelect.innerHTML = '';
+            crewAgentsWrapper.innerHTML = '';
+            (agentsData.agents || []).forEach(agent => {
+                // Add to hidden select for form submission
+                crewAgentsSelect.innerHTML += `<option value="${agent.id}">${agent.persona.avatar} ${agent.persona.name}</option>`;
+                
+                // Render as checkbox card
+                crewAgentsWrapper.innerHTML += `
+                    <label style="display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--bg-secondary); border: 2px solid transparent; border-radius: 8px; cursor: pointer; transition: all 0.2s; border-color: var(--border-color);">
+                        <input type="checkbox" value="${agent.id}" class="crew-agent-checkbox" style="width: 18px; height: 18px; cursor: pointer;">
+                        <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+                            <span style="font-size: 24px;">${agent.persona.avatar || '👤'}</span>
+                            <span style="font-weight: 500; color: var(--text-primary);">${escapeHtml(agent.persona.name)}</span>
+                        </div>
+                    </label>
+                `;
+            });
+            
+            // Update select when checkboxes change
+            document.querySelectorAll('.crew-agent-checkbox').forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
+                    const selected = Array.from(document.querySelectorAll('.crew-agent-checkbox:checked')).map(cb => cb.value);
+                    crewAgentsSelect.value = selected.join(',');
+                });
+            });
+        }
+        
+        // Load crews for member addition
+        const crewSelect = document.getElementById('member-crew-select');
+        if (crewSelect) {
+            crewSelect.innerHTML = '<option value="">Choose a crew...</option>';
+            (crewsData.crews || []).forEach(crew => {
+                crewSelect.innerHTML += `<option value="${crew.id}">${crew.name}</option>`;
+            });
+        }
+        
+        // Load crews for communications - send message
+        const sendMsgCrewSelect = document.getElementById('send-msg-crew');
+        if (sendMsgCrewSelect) {
+            sendMsgCrewSelect.innerHTML = '<option value="">Choose crew...</option>';
+            (crewsData.crews || []).forEach(crew => {
+                sendMsgCrewSelect.innerHTML += `<option value="${crew.id}">${crew.name}</option>`;
+            });
+            // Add change listener with proper context
+            sendMsgCrewSelect.onchange = function() {
+                console.log('[Crews] Crew selected, loading agents:', this.value);
+                updateCrewAgentSelects();
+            };
+        }
+        
+        // Load crews for communications - view history
+        const viewCommCrewSelect = document.getElementById('view-comm-crew');
+        if (viewCommCrewSelect) {
+            viewCommCrewSelect.innerHTML = '<option value="">Choose a crew...</option>';
+            (crewsData.crews || []).forEach(crew => {
+                viewCommCrewSelect.innerHTML += `<option value="${crew.id}">${crew.name}</option>`;
+            });
+        }
+        
+    } catch (e) {
+        console.error('Failed to load crews page:', e);
+        toast('Failed to load crews data', 'error');
+    }
+}
+
+function renderCrewsList(crews) {
+    const listEl = document.getElementById('crews-list');
+    if (!crews.length) {
+        listEl.innerHTML = '<div class="empty-state"><div class="empty-icon">👥</div><div class="empty-title">No Crews Yet</div><div class="empty-description">Create your first crew to get started</div></div>';
+        return;
+    }
+    
+    listEl.innerHTML = crews.map(crew => {
+        const memberCount = crew.members ? crew.members.length : 0;
+        const protocolIcons = { 'a2a': '🔗', 'adk': '🌐', 'rest': '📡' };
+        const protocolIcon = protocolIcons[crew.communication_protocol] || '🔗';
+        
+        return `
+            <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; transition: all 0.3s ease;">
+                <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px;">
+                    <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                        <div style="width: 48px; height: 48px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 24px;">
+                            👥
+                        </div>
+                        <div style="flex: 1;">
+                            <div style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">
+                                ${escapeHtml(crew.name)}
+                            </div>
+                            <div style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                                <span>${protocolIcon} ${escapeHtml(crew.communication_protocol).toUpperCase()}</span>
+                                <span style="color: var(--text-tertiary);">•</span>
+                                <span>🏢 ${escapeHtml(crew.organization || 'default')}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="background: #4CAF50; color: white; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; white-space: nowrap;">
+                        ✅ Active
+                    </div>
+                </div>
+                
+                <div style="background: var(--bg-secondary); border-radius: 8px; padding: 12px; margin-bottom: 16px; min-height: 40px;">
+                    <div style="font-size: 13px; color: var(--text-primary); line-height: 1.5;">
+                        ${escapeHtml(crew.description || 'No description provided')}
+                    </div>
+                </div>
+                
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+                    <div style="background: var(--bg-secondary); border-radius: 8px; padding: 10px; text-align: center;">
+                        <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px;">MEMBERS</div>
+                        <div style="font-size: 18px; font-weight: 700; color: var(--text-primary);">${memberCount}</div>
+                    </div>
+                    <div style="background: var(--bg-secondary); border-radius: 8px; padding: 10px; text-align: center;">
+                        <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px;">PROTOCOL</div>
+                        <div style="font-size: 16px;">${protocolIcon}</div>
+                    </div>
+                </div>
+                
+                ${memberCount > 0 ? `
+                    <div style="margin-bottom: 16px;">
+                        <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px;">Team Members:</div>
+                        <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                            ${(crew.members || []).map(m => `
+                                <span style="background: var(--bg-secondary); padding: 4px 10px; border-radius: 16px; font-size: 12px; color: var(--text-primary);">
+                                    👤 ${escapeHtml(m.agent_name || 'Unknown')}
+                                </span>
+                            `).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+                
+                <div style="display: flex; gap: 8px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+                    <button onclick="deleteCrew('${crew.id}')" style="flex: 1; padding: 10px; background: #ff5252; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s;">
+                        🗑️ Delete
+                    </button>
+                    <button style="flex: 1; padding: 10px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
+                        📊 Details
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function createCrew() {
+    const name = document.getElementById('crew-name').value.trim();
+    const description = document.getElementById('crew-description').value.trim();
+    const organization = document.getElementById('crew-organization').value.trim();
+    const protocol = document.getElementById('crew-protocol').value;
+    
+    // Get selected agents from checkboxes
+    const selectedCheckboxes = document.querySelectorAll('.crew-agent-checkbox:checked');
+    const selectedAgentIds = Array.from(selectedCheckboxes).map(cb => cb.value);
+    
+    if (!name) {
+        toast('Crew name is required', 'error');
+        return;
+    }
+    
+    if (selectedAgentIds.length === 0) {
+        toast('Please select at least one agent', 'error');
+        return;
+    }
+    
+    try {
+        // Get agent details from the page
+        const allCheckboxes = document.querySelectorAll('.crew-agent-checkbox');
+        const agentMap = {};
+        const crewAgentsSelect = document.getElementById('crew-agents');
+        
+        Array.from(crewAgentsSelect.options).forEach(option => {
+            agentMap[option.value] = option.text.replace(/^\S+\s/, '');
+        });
+        
+        const selectedAgents = selectedAgentIds.map(id => ({
+            agent_id: id,
+            agent_name: agentMap[id] || 'Unknown',
+            role: 'contributor'
+        }));
+        
+        const data = await api('/crews/create', 'POST', {
+            name, description, organization, communication_protocol: protocol, members: selectedAgents
+        });
+        
+        if (data.success) {
+            toast('Crew created successfully!', 'success');
+            // Clear form
+            document.getElementById('crew-name').value = '';
+            document.getElementById('crew-description').value = '';
+            document.getElementById('crew-organization').value = 'default';
+            // Clear agent selection
+            document.querySelectorAll('.crew-agent-checkbox').forEach(cb => cb.checked = false);
+            // Reload page
+            loadCrewsPage();
+        } else {
+            toast(data.error || 'Failed to create crew', 'error');
+        }
+    } catch (e) {
+        toast('Failed to create crew: ' + e.message, 'error');
+    }
+}
+
+async function addCrewMember() {
+    const crewId = document.getElementById('member-crew-select').value;
+    const agentId = document.getElementById('member-agent-select').value;
+    const role = document.getElementById('member-role').value;
+    
+    if (!crewId) {
+        toast('Please select a crew', 'error');
+        return;
+    }
+    
+    if (!agentId) {
+        toast('Please select an agent', 'error');
+        return;
+    }
+    
+    try {
+        const data = await api(`/crews/${crewId}/members`, 'POST', {
+            agent_id: agentId, role
+        });
+        
+        if (data.success) {
+            toast('Member added to crew successfully!', 'success');
+            // Clear selections
+            document.getElementById('member-crew-select').value = '';
+            document.getElementById('member-agent-select').value = '';
+            document.getElementById('member-role').value = 'contributor';
+            // Reload page
+            loadCrewsPage();
+        } else {
+            toast(data.error || 'Failed to add member', 'error');
+        }
+    } catch (e) {
+        toast('Failed to add crew member: ' + e.message, 'error');
+    }
+}
+
+async function deleteCrew(crewId) {
+    if (!confirm('Are you sure you want to delete this crew? This action cannot be undone.')) {
+        return;
+    }
+    
+    try {
+        const data = await api(`/crews/${crewId}`, 'DELETE');
+        
+        if (data.success) {
+            toast('Crew deleted successfully!', 'success');
+            // Reload page
+            loadCrewsPage();
+        } else {
+            toast(data.error || 'Failed to delete crew', 'error');
+        }
+    } catch (e) {
+        toast('Failed to delete crew: ' + e.message, 'error');
+    }
+}
+
+async function loadCrewCommunications() {
+    const crewId = document.getElementById('view-comm-crew').value;
+    
+    if (!crewId) {
+        document.getElementById('crew-communications').innerHTML = '<div style="text-align: center; color: var(--text-secondary);">👈 Select a crew to view communications</div>';
+        return;
+    }
+    
+    const commsEl = document.getElementById('crew-communications');
+    commsEl.innerHTML = '<div style="text-align: center; color: var(--text-secondary);">⏳ Loading communications...</div>';
+    
+    try {
+        const data = await api(`/a2a/communications/${crewId}`);
+        console.log('[Communications] API Response:', data);
+        
+        if (data.success && data.communications && data.communications.length > 0) {
+            commsEl.innerHTML = data.communications.map((comm, idx) => {
+                // Communications have fields: id, crew_id, from, to, message, protocol, timestamp, status
+                const fromAgent = comm.from || comm.sender_id || 'Unknown';
+                const toAgent = comm.to || comm.receiver_id || 'Unknown';
+                
+                // Extract content text - it can be a dict or a string
+                let contentText = 'No content';
+                if (comm.message) {
+                    if (typeof comm.message === 'string') {
+                        contentText = comm.message;
+                    } else if (typeof comm.message === 'object' && comm.message.text) {
+                        contentText = comm.message.text;
+                    }
+                } else if (comm.content) {
+                    if (typeof comm.content === 'string') {
+                        contentText = comm.content;
+                    } else if (typeof comm.content === 'object' && comm.content.text) {
+                        contentText = comm.content.text;
+                    }
+                }
+                
+                const msgType = comm.message_type || 'message';
+                const timestamp = comm.timestamp ? new Date(comm.timestamp).toLocaleString() : 'Just now';
+                
+                return `
+                    <div style="border-left: 3px solid var(--accent); background: var(--card-bg); border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <span style="font-weight: 600; color: var(--text-primary);">${escapeHtml(fromAgent)}</span>
+                                <span style="color: var(--text-secondary);">→</span>
+                                <span style="font-weight: 600; color: var(--text-primary);">${escapeHtml(toAgent)}</span>
+                                <span style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 12px; font-size: 11px; color: var(--text-secondary);">
+                                    ${escapeHtml(msgType)}
+                                </span>
+                            </div>
+                            <span style="font-size: 12px; color: var(--text-secondary);">
+                                ${timestamp}
+                            </span>
+                        </div>
+                        <div style="color: var(--text-primary); line-height: 1.4; word-wrap: break-word;">
+                            ${escapeHtml(contentText)}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } else {
+            commsEl.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 20px;">No communications yet. Start collaborating with crew members!</div>';
+        }
+    } catch (e) {
+        commsEl.innerHTML = `<div style="text-align: center; color: var(--red);">❌ Failed to load communications</div>`;
+        console.error('Error loading communications:', e);
+    }
+}
+
+async function updateCrewAgentSelects() {
+    const crewId = document.getElementById('send-msg-crew').value;
+    const fromSelect = document.getElementById('send-msg-from');
+    const toSelect = document.getElementById('send-msg-to');
+    
+    console.log('[Agents] Updating agent selects for crew:', crewId);
+    
+    if (!crewId) {
+        fromSelect.innerHTML = '<option value="">Select agent...</option>';
+        toSelect.innerHTML = '<option value="">Select agent...</option>';
+        return;
+    }
+    
+    try {
+        console.log('[API] Fetching crew details from /crews/' + crewId);
+        const crewData = await api(`/crews/${crewId}`);
+        
+        console.log('[API] Crew response:', crewData);
+        
+        if (crewData.success && crewData.crew) {
+            const crew = crewData.crew;
+            const members = crew.members || [];
+            
+            console.log('[Agents] Found members:', members.length);
+            
+            if (members.length === 0) {
+                fromSelect.innerHTML = '<option value="">No members in crew</option>';
+                toSelect.innerHTML = '<option value="">No members in crew</option>';
+                toast('This crew has no members. Add members first.', 'warning');
+                return;
+            }
+            
+            const agentHtml = members.map(m => 
+                `<option value="${m.agent_id}">${escapeHtml(m.agent_name)}</option>`
+            ).join('');
+            
+            fromSelect.innerHTML = '<option value="">Select agent...</option>' + agentHtml;
+            toSelect.innerHTML = '<option value="">Select agent...</option>' + agentHtml;
+            
+            console.log('[Agents] Populated dropdowns with', members.length, 'members');
+        } else {
+            console.error('[API] Crew data invalid:', crewData);
+            toast('Failed to load crew members', 'error');
+            fromSelect.innerHTML = '<option value="">Error loading members</option>';
+            toSelect.innerHTML = '<option value="">Error loading members</option>';
+        }
+    } catch (e) {
+        console.error('[Error] Failed to load crew agents:', e);
+        toast('Failed to load crew members: ' + e.message, 'error');
+        fromSelect.innerHTML = '<option value="">Error loading members</option>';
+        toSelect.innerHTML = '<option value="">Error loading members</option>';
+    }
+}
+
+async function sendCrewMessage() {
+    console.log('[Message] Send button clicked');
+    
+    const crewId = document.getElementById('send-msg-crew').value.trim();
+    const fromAgent = document.getElementById('send-msg-from').value.trim();
+    const toAgent = document.getElementById('send-msg-to').value.trim();
+    const messageType = document.getElementById('msg-type').value.trim();
+    const content = document.getElementById('msg-content').value.trim();
+    
+    console.log('[Message] Raw Data:', { crewId, fromAgent, toAgent, messageType, contentLen: content.length });
+    
+    // Validation checks
+    if (!crewId) {
+        toast('❌ Please select a crew', 'error');
+        return;
+    }
+    if (!fromAgent) {
+        toast('❌ Please select a FROM agent', 'error');
+        document.getElementById('send-msg-from').focus();
+        return;
+    }
+    if (!toAgent) {
+        toast('❌ Please select a TO agent', 'error');
+        document.getElementById('send-msg-to').focus();
+        return;
+    }
+    if (!content) {
+        toast('❌ Please write a message', 'error');
+        document.getElementById('msg-content').focus();
+        return;
+    }
+    
+    if (fromAgent === toAgent) {
+        toast('⚠️ Cannot send message to the same agent', 'error');
+        return;
+    }
+    
+    try {
+        // Build payload with content as dictionary
+        const payload = {
+            crew_id: String(crewId),
+            from_agent: String(fromAgent),
+            to_agent: String(toAgent),
+            message_type: String(messageType || 'task'),
+            content: {
+                text: String(content),
+                type: 'text'
+            }
+        };
+        
+        console.log('[API] Sending payload:', payload);
+        console.log('[API] Payload JSON:', JSON.stringify(payload));
+        
+        const data = await api('/a2a/send', 'POST', payload);
+        
+        console.log('[API] Response:', data);
+        
+        if (data.success) {
+            toast('✅ Message sent successfully!', 'success');
+            document.getElementById('msg-content').value = '';
+            // Reload communications history
+            await loadCrewCommunications();
+        } else {
+            toast('❌ ' + (data.error || 'Failed to send message'), 'error');
+        }
+    } catch (e) {
+        console.error('[Error] Send message error:', e);
+        toast('❌ Error: ' + e.message, 'error');
+    }
+}
+
+async function broadcastCrewMessage() {
+    console.log('[Broadcast] Broadcast button clicked');
+    
+    const crewId = document.getElementById('send-msg-crew').value.trim();
+    const fromAgent = document.getElementById('send-msg-from').value.trim();
+    const content = document.getElementById('msg-content').value.trim();
+    
+    console.log('[Broadcast] Raw Data:', { crewId, fromAgent, contentLen: content.length });
+    
+    if (!crewId) {
+        toast('❌ Please select a crew', 'error');
+        return;
+    }
+    if (!fromAgent) {
+        toast('❌ Please select a FROM agent', 'error');
+        document.getElementById('send-msg-from').focus();
+        return;
+    }
+    if (!content) {
+        toast('❌ Please write a message', 'error');
+        document.getElementById('msg-content').focus();
+        return;
+    }
+    
+    try {
+        // Build payload with content as dictionary
+        const payload = {
+            crew_id: String(crewId),
+            from_agent: String(fromAgent),
+            message_type: 'broadcast',
+            content: {
+                text: String(content),
+                type: 'text'
+            }
+        };
+        
+        console.log('[API] Broadcasting payload:', payload);
+        console.log('[API] Payload JSON:', JSON.stringify(payload));
+        
+        const data = await api('/a2a/broadcast', 'POST', payload);
+        
+        console.log('[API] Response:', data);
+        
+        if (data.success) {
+            toast('✅ Message broadcast to all crew members!', 'success');
+            document.getElementById('msg-content').value = '';
+            // Reload communications history
+            await loadCrewCommunications();
+        } else {
+            toast('❌ ' + (data.error || 'Failed to broadcast message'), 'error');
+        }
+    } catch (e) {
+        console.error('[Error] Broadcast error:', e);
+        toast('❌ Error: ' + e.message, 'error');
+    }
+}

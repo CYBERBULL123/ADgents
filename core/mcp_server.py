@@ -53,12 +53,25 @@ class MCPServer:
         self.skill_registry = skill_registry
         self.agents = agents or []
         self._agent_map = {a.persona.id: a for a in self.agents}
+        
+        # Log initialization status
+        try:
+            import sys
+            from .llm import LLM_ROUTER
+            providers = LLM_ROUTER.available_providers()
+            default_provider = LLM_ROUTER._default_provider
+            print(f"LLM Providers available: {providers}, default: {default_provider}", file=sys.stderr)
+            print(f"Agents loaded: {[a.persona.name for a in self.agents]}", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: Could not log provider status: {e}", file=sys.stderr)
 
     # ── Capability introspection ─────────────────────────────────────────────
 
     def _list_tools(self) -> List[Dict]:
-        """Return all ADgents skills as MCP tools."""
+        """Return all ADgents skills and agent communication tools."""
         tools = []
+        
+        # Add skills
         if self.skill_registry:
             for skill in self.skill_registry.list():
                 tools.append({
@@ -66,19 +79,38 @@ class MCPServer:
                     "description": skill.description,
                     "inputSchema": skill.parameters,
                 })
-        # Each agent's think() as a tool
+        
+        # Agent chat tools — allows external communication with agents
         for agent in self.agents:
+            safe_name = agent.persona.name.lower().replace(' ', '_')
             tools.append({
-                "name": f"agent_{agent.persona.name.lower().replace(' ', '_')}_chat",
-                "description": f"Chat with {agent.persona.name} ({agent.persona.role}). {agent.persona.backstory[:120]}",
+                "name": f"chat_with_{safe_name}",
+                "description": f"Have a conversation with {agent.persona.name} ({agent.persona.role}). Expertise: {', '.join(agent.persona.expertise_domains[:3])}",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "message": {"type": "string", "description": "Your message to the agent"}
+                        "message": {"type": "string", "description": "Your message or question"}
                     },
                     "required": ["message"]
                 }
             })
+        
+        # Agent collaboration tool — for agents to consult each other
+        if len(self.agents) > 1:
+            agent_names = [a.persona.name for a in self.agents]
+            tools.append({
+                "name": "consult_agent_team",
+                "description": f"Consult with another agent for specialized expertise. Available agents: {', '.join(agent_names)}",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "agent_name": {"type": "string", "description": f"Name of agent to consult: {' | '.join(agent_names)}"},
+                        "question": {"type": "string", "description": "Your question or topic to discuss"}
+                    },
+                    "required": ["agent_name", "question"]
+                }
+            })
+        
         return tools
 
     def _list_prompts(self) -> List[Dict]:
@@ -109,21 +141,56 @@ class MCPServer:
         }
 
     def _call_tool(self, name: str, arguments: Dict) -> Dict:
-        """Execute a skill or agent chat."""
+        """Execute a skill, agent chat, or agent collaboration."""
+        
         # Agent chat tools
         for agent in self.agents:
-            agent_tool_name = f"agent_{agent.persona.name.lower().replace(' ', '_')}_chat"
-            if name == agent_tool_name:
+            safe_name = agent.persona.name.lower().replace(' ', '_')
+            if name == f"chat_with_{safe_name}" or name == f"agent_{safe_name}_chat":
                 message = arguments.get("message", "")
-                reply = agent.think(message)
-                return {"content": [{"type": "text", "text": reply}]}
-
+                try:
+                    reply = agent.think(message)
+                    return {"content": [{"type": "text", "text": reply}]}
+                except Exception as e:
+                    return {
+                        "content": [{"type": "text", "text": f"Error communicating with {agent.persona.name}: {str(e)}"}],
+                        "isError": True
+                    }
+        
+        # Agent collaboration tool
+        if name == "consult_agent_team":
+            agent_name = arguments.get("agent_name", "").strip()
+            question = arguments.get("question", "")
+            
+            # Find the agent
+            target_agent = None
+            for agent in self.agents:
+                if agent.persona.name.lower() == agent_name.lower():
+                    target_agent = agent
+                    break
+            
+            if not target_agent:
+                available = ", ".join([a.persona.name for a in self.agents])
+                return {
+                    "content": [{"type": "text", "text": f"Agent '{agent_name}' not found. Available: {available}"}],
+                    "isError": True
+                }
+            
+            try:
+                response = target_agent.think(question)
+                return {"content": [{"type": "text", "text": response}]}
+            except Exception as e:
+                return {
+                    "content": [{"type": "text", "text": f"Error consulting {target_agent.persona.name}: {str(e)}"}],
+                    "isError": True
+                }
+        
         # Skill tools
         if self.skill_registry:
             result = self.skill_registry.execute(name, **arguments)
             text = result.to_text()
             return {"content": [{"type": "text", "text": text}], "isError": not result.success}
-
+        
         return {"content": [{"type": "text", "text": f"Tool '{name}' not found."}], "isError": True}
 
     # ── JSON-RPC dispatcher ──────────────────────────────────────────────────
@@ -186,43 +253,103 @@ class MCPServer:
 
     # ── Stdio transport (Claude Desktop) ─────────────────────────────────────
 
-    async def run_stdio(self):
+    def run_stdio(self):
         """
-        Run the MCP server over stdin/stdout.
-        Add to Claude Desktop config:
+        Run the MCP server over stdin/stdout (cross-platform: Windows, Linux, macOS).
+        
+        This uses synchronous I/O which is compatible with all operating systems.
+        The MCP protocol uses JSON-RPC over line-delimited streams.
+        
+        Configuration for Claude Desktop (.json):
           {
             "mcpServers": {
               "adgents": {
                 "command": "python",
-                "args": ["-m", "adgents.mcp"],
+                "args": ["-m", "core"],
                 "env": {"GEMINI_API_KEY": "..."}
               }
             }
           }
         """
-        reader = asyncio.StreamReader()
-        protocol = asyncio.StreamReaderProtocol(reader)
-        loop = asyncio.get_event_loop()
-        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-
-        _, writer = await loop.connect_write_pipe(
-            asyncio.BaseProtocol, sys.stdout.buffer
-        )
-
-        while True:
-            try:
-                line = await reader.readline()
-                if not line:
+        import io
+        import os
+        from pathlib import Path
+        
+        # Ensure we're reading/writing in text mode with UTF-8
+        # This works across Windows, Linux, and macOS
+        if hasattr(sys.stdin, 'buffer'):
+            # Get binary streams and wrap in text mode
+            input_stream = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8', newline='\n')
+        else:
+            input_stream = sys.stdin
+        
+        if hasattr(sys.stdout, 'buffer'):
+            output_stream = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', newline='\n', write_through=True)
+        else:
+            output_stream = sys.stdout
+        
+        try:
+            while True:
+                try:
+                    # Read a single line (blocking)
+                    line = input_stream.readline()
+                    
+                    # EOF reached
+                    if not line:
+                        break
+                    
+                    line = line.strip()
+                    if not line:
+                        # Skip empty lines
+                        continue
+                    
+                    # Parse JSON-RPC request
+                    req = json.loads(line)
+                    
+                    # Handle the request
+                    response = self._handle_request(req)
+                    
+                    # Send response (skip notifications which return None)
+                    if response is not None:
+                        output_stream.write(json.dumps(response) + '\n')
+                        output_stream.flush()
+                        
+                except json.JSONDecodeError as e:
+                    # Skip malformed JSON
+                    pass
+                except EOFError:
+                    # stdin closed
                     break
-                req = json.loads(line.decode())
-                response = self._handle_request(req)
-                if response is not None:
-                    out = json.dumps(response) + "\n"
-                    sys.stdout.write(out)
-                    sys.stdout.flush()
-            except json.JSONDecodeError:
-                pass
-            except Exception:
+                except BrokenPipeError:
+                    # Output pipe closed (client disconnected)
+                    break
+                except Exception as e:
+                    # Log error to stderr and continue
+                    error_msg = json.dumps({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32603,
+                            "message": "Internal error",
+                            "data": str(e)
+                        }
+                    })
+                    try:
+                        sys.stderr.write(f"MCP Server error: {e}\n")
+                        sys.stderr.flush()
+                    except:
+                        pass
+        
+        except KeyboardInterrupt:
+            # Handle Ctrl+C gracefully
+            pass
+        except Exception as e:
+            sys.stderr.write(f"MCP Server fatal error: {e}\n")
+            sys.stderr.flush()
+        finally:
+            try:
+                output_stream.close()
+                input_stream.close()
+            except:
                 pass
 
     def get_fastapi_router(self):

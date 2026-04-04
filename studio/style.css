@@ -3458,6 +3458,97 @@ textarea {
   }
 }
 
+/* ─── Crew Collaboration Styles ───────────────────────────────────────── */
+#page-crews .card {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(5, 150, 105, 0.05) 100%);
+  border: 1px solid rgba(16, 185, 129, 0.15);
+  transition: all 0.3s ease;
+}
+
+#page-crews .card:hover {
+  border-color: rgba(16, 185, 129, 0.3);
+  box-shadow: 0 8px 32px rgba(16, 185, 129, 0.1);
+  transform: translateY(-2px);
+}
+
+#page-crews .card-header {
+  border-bottom: 1px solid rgba(16, 185, 129, 0.1);
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+#page-crews .form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+}
+
+#page-crews .form-group {
+  margin-bottom: 0;
+}
+
+#page-crews input[type=text],
+#page-crews textarea,
+#page-crews select {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1.5px solid rgba(16, 185, 129, 0.2);
+  border-radius: var(--radius-xs);
+  padding: 0.8rem 1rem;
+  color: var(--text-primary);
+  transition: all 0.3s ease;
+}
+
+#page-crews input:focus,
+#page-crews textarea:focus,
+#page-crews select:focus {
+  border-color: rgba(16, 185, 129, 0.6);
+  background: rgba(16, 185, 129, 0.05);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+#page-crews .communications-list {
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+#page-crews .communications-list > div {
+  transition: all 0.2s ease;
+}
+
+#page-crews .communications-list > div:hover {
+  background: rgba(16, 185, 129, 0.05);
+}
+
+@media (max-width: 900px) {
+  #page-crews .two-col {
+    gap: 1.25rem;
+  }
+}
+
+@media (max-width: 600px) {
+  #page-crews .card {
+    padding: 1.25rem;
+  }
+
+  #page-crews .form-grid {
+    gap: 1rem;
+  }
+
+  #page-crews .form-group label {
+    font-size: 0.8rem;
+  }
+
+  #page-crews input[type=text],
+  #page-crews textarea,
+  #page-crews select {
+    padding: 0.7rem 0.9rem;
+    font-size: 16px;
+  }
+}
+
 /* ─── MCP Server Styles ───────────────────────────────────────────────── */
 #page-mcp .card {
   background: linear-gradient(135deg, rgba(124, 58, 237, 0.05) 0%, rgba(37, 99, 235, 0.05) 100%);

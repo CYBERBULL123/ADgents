@@ -98,6 +98,14 @@
             <span class="nav-icon">🔗</span>
             <span>MCP Server</span>
         </a>
+        <a class="nav-item" data-page="adk" onclick="navigate('adk');closeSidebar()">
+            <span class="nav-icon">🤖</span>
+            <span>ADK Workflows</span>
+        </a>
+        <a class="nav-item" data-page="crews" onclick="navigate('crews');closeSidebar()">
+            <span class="nav-icon">👥</span>
+            <span>Crew Collaboration</span>
+        </a>
         <a class="nav-item" data-page="files" onclick="navigate('files');closeSidebar()">
             <span class="nav-icon">📁</span>
             <span>Files</span>
@@ -777,49 +785,86 @@
                 <div class="page-header">
                     <div>
                         <div class="page-title">🔗 MCP Server</div>
-                        <div class="breadcrumb">Model Context Protocol Integration</div>
+                        <div class="breadcrumb">Model Context Protocol for LLM Integration</div>
                     </div>
-                    <button class="btn btn-primary" onclick="toggleMCPServer()">
-                        <span id="mcp-toggle-text">Start Server</span>
-                    </button>
                 </div>
 
                 <div class="two-col">
+                    <!-- Status -->
                     <div class="card">
                         <div class="card-header">
                             <h3>📊 Server Status</h3>
                         </div>
-                        <div id="mcp-status">
+                        <div id="mcp-status" style="padding: 1rem;">
                             <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
                                 Loading...
                             </div>
                         </div>
+                        <div style="display: flex; gap: 0.5rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+                            <button class="btn btn-primary" onclick="startMCPServer()" id="btn-start-mcp">▶️ Start Server</button>
+                            <button class="btn btn-danger" onclick="stopMCPServer()" id="btn-stop-mcp" style="display:none;">⏹️ Stop Server</button>
+                            <button class="btn btn-ghost" onclick="loadMCPPage()">🔄 Refresh</button>
+                        </div>
                     </div>
 
+                    <!-- Configuration -->
                     <div class="card">
                         <div class="card-header">
                             <h3>⚙️ Configuration</h3>
                         </div>
                         <div class="form-group">
-                            <label for="mcp-mode">Protocol Mode</label>
-                            <select id="mcp-mode">
+                            <label for="mcp-mode">Mode</label>
+                            <select id="mcp-mode" class="form-input">
                                 <option value="stdio">stdio (Claude Desktop)</option>
                                 <option value="sse">SSE (Web Clients)</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="mcp-port">Server Port</label>
-                            <input type="number" id="mcp-port" value="8001" min="1024" max="65535" />
+                            <label for="mcp-port">Port (for SSE)</label>
+                            <input type="number" id="mcp-port" value="8001" min="1024" max="65535" class="form-input" />
                         </div>
-                        <button class="btn btn-primary" onclick="saveMCPConfig()" style="width: 100%; margin-top: 0.5rem;">💾 Save Configuration</button>
+                        <button class="btn btn-primary" onclick="saveMCPConfig()" style="width:100%;">💾 Save Config</button>
                     </div>
                 </div>
 
+                <!-- Available Tools -->
                 <div class="card">
                     <div class="card-header">
-                        <h3>🔨 Available Tools (<span id="mcp-tools-count">0</span>)</h3>
+                        <h3>🔨 Available Skills as MCP Tools</h3>
                     </div>
-                    <div id="mcp-tools-list" style="display: grid; gap: 1rem;">
+                    <div id="mcp-tools-list" style="display: grid; gap: 0.5rem; max-height: 400px; overflow-y: auto;">
+                        <div style="text-align: center; padding: 1rem; color: var(--text-secondary);">Loading...</div>
+                    </div>
+                </div>
+
+                <!-- Available Agents -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🤖 Available Agents</h3>
+                    </div>
+                    <div id="mcp-agents-list" style="display: grid; gap: 0.5rem;">
+                        <div style="text-align: center; padding: 1rem; color: var(--text-secondary);">Loading...</div>
+                    </div>
+                </div>
+
+                <!-- Connection Instructions -->
+                <div class="card" style="background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2);">
+                    <div class="card-header">
+                        <h3>📋 Claude Desktop Integration</h3>
+                    </div>
+                    <p style="margin: 0 0 0.75rem 0; font-size: 0.9rem; color: var(--text-secondary);">Add this to your Claude config to access ADgents skills:</p>
+                    <div style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-sm); font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; overflow-x: auto;">
+                        <code style="color: var(--text-primary);">{
+  "mcpServers": {
+    "adgents": {
+      "command": "python",
+      "args": ["-m", "adgents.mcp"]
+    }
+  }
+}</code>
+                    </div>
+                </div>
+            </section>
                         <!-- Tools will be injected here -->
                     </div>
                 </div>
@@ -829,100 +874,59 @@
 
             <!-- ── SETTINGS ── -->
             <section class="page" id="page-settings">
-                <div class="settings-container">
+                <div style="max-width: 800px; margin: 0 auto; padding: 1rem;">
                     
-                    <!-- LLM Provider Configuration -->
+                    <!-- LLM Configuration -->
                     <div class="card">
                         <div class="card-header">
-                            <h3>🤖 LLM Provider Configuration</h3>
-                            <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0 0 0;">Configure your AI model providers and API keys</p>
+                            <h3>🤖 LLM Provider</h3>
                         </div>
+                        
+                        <!-- Environment Status -->
+                        <div style="background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1.5rem;">
+                            <div style="font-weight: 600; margin-bottom: 0.75rem;">📋 Configured Providers</div>
+                            <div id="llm-env-status" style="display: grid; gap: 0.5rem;">
+                                <div style="color: var(--text-secondary);">Loading...</div>
+                            </div>
+                        </div>
+
+                        <!-- Provider & Model Selection -->
                         <div class="form-group">
-                            <label>Select Provider *</label>
-                            <select id="llm-provider" onchange="updateModelHint()" class="form-input">
-                                <option value="">-- Choose a provider --</option>
-                                <option value="openai">🔴 OpenAI (GPT-4, GPT-4o)</option>
+                            <label>Select Provider</label>
+                            <select id="llm-provider" onchange="updateProviderSelection()" class="form-input">
+                                <option value="">-- Choose --</option>
+                                <option value="openai">🔴 OpenAI</option>
                                 <option value="gemini">🔵 Google Gemini</option>
                                 <option value="claude">✨ Anthropic Claude</option>
-                                <option value="ollama">🦙 Ollama (Local)</option>
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label>API Key <span style="color: var(--text-secondary);">(skip for Ollama)</span> *</label>
-                            <input type="password" id="llm-api-key" placeholder="sk-..." class="form-input" />
-                        </div>
-                        <div class="form-group">
-                            <label>Model Name</label>
-                            <input type="text" id="llm-model" placeholder="e.g., gpt-4o-mini" class="form-input" />
-                            <small id="model-hint" style="display:block; color: var(--text-secondary); margin-top: 0.3rem;"></small>
-                        </div>
-                        <div style="display: flex; gap: 0.75rem;">
-                            <button class="btn btn-primary" onclick="saveLLMConfig()">💾 Save Configuration</button>
-                            <button class="btn btn-ghost" onclick="testLLMConnection()">🧪 Test Connection</button>
-                        </div>
-                        <div id="llm-config-status" style="margin-top:1rem"></div>
-                    </div>
 
-                    <!-- Provider Status -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3>📡 Provider Status</h3>
-                        </div>
-                        <div id="provider-status-list" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
-                        <button class="btn btn-ghost" style="margin-top: 1rem; width: 100%;" onclick="refreshProviderStatus()">🔄 Refresh Status</button>
-                    </div>
-
-                    <!-- MCP Server Configuration -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3>🔗 MCP Server Configuration</h3>
-                            <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0 0 0;">Model Context Protocol settings</p>
-                        </div>
                         <div class="form-group">
-                            <label>Mode</label>
-                            <select id="mcp-mode" class="form-input">
-                                <option value="stdio">stdio (Standard Input/Output)</option>
-                                <option value="sse">SSE (Server-Sent Events)</option>
+                            <label>Select Model</label>
+                            <select id="llm-model" class="form-input" onchange="onModelSelected()">
+                                <option value="">⏳ Loading...</option>
                             </select>
+                            <small id="model-hint" style="display:block; color:var(--text-secondary); margin-top:0.5rem;">Available models from configured providers</small>
                         </div>
-                        <div class="form-group">
-                            <label>Port (for SSE mode)</label>
-                            <input type="number" id="mcp-port" placeholder="8001" class="form-input" />
-                        </div>
-                        <button class="btn btn-primary" onclick="saveMCPConfig()">💾 Save MCP Settings</button>
-                        <div id="mcp-config-status" style="margin-top:1rem"></div>
-                    </div>
 
-                    <!-- Database Settings -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3>💾 Database Settings</h3>
-                            <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0 0 0;">Memory storage configuration</p>
+                        <div style="display:flex; gap:0.75rem;">
+                            <button class="btn btn-primary" onclick="saveLLMConfig()">💾 Save</button>
+                            <button class="btn btn-ghost" onclick="testLLMConnection()">🧪 Test</button>
                         </div>
-                        <div class="form-group">
-                            <label>Database Type</label>
-                            <select id="db-type" class="form-input" onchange="updateDBConnectionFields()">
-                                <option value="sqlite">SQLite (Default - Local)</option>
-                                <option value="postgresql">PostgreSQL (Enterprise)</option>
-                                <option value="mongodb">MongoDB (Document)</option>
-                            </select>
-                        </div>
-                        <div id="db-connection-fields"></div>
-                        <button class="btn btn-primary" onclick="saveDBConfig()">💾 Save Database Settings</button>
-                        <div id="db-config-status" style="margin-top:1rem"></div>
+                        <div id="llm-config-status" style="margin-top:0.75rem"></div>
                     </div>
 
                     <!-- Personal Settings -->
                     <div class="card">
                         <div class="card-header">
-                            <h3>⚙️ Personal Settings</h3>
+                            <h3>⚙️ Preferences</h3>
                         </div>
                         <div class="form-group">
                             <label>Organization Name</label>
                             <input type="text" id="org-name" placeholder="Your organization" class="form-input" />
                         </div>
                         <div class="form-group">
-                            <label>Default Agent Memory Type</label>
+                            <label>Memory Type</label>
                             <select id="memory-type" class="form-input">
                                 <option value="multi_tier">Multi-Tier (Recommended)</option>
                                 <option value="episodic">Episodic Only</option>
@@ -931,48 +935,23 @@
                         </div>
                         <div class="form-group">
                             <label>
-                                <input type="checkbox" id="auto-save" checked /> Auto-save agent conversations
+                                <input type="checkbox" id="auto-save" checked /> Auto-save conversations
                             </label>
                         </div>
-                        <button class="btn btn-primary" onclick="savePersonalSettings()">💾 Save Settings</button>
+                        <button class="btn btn-primary" onclick="savePersonalSettings()">💾 Save</button>
                         <div id="personal-config-status" style="margin-top:1rem"></div>
                     </div>
 
-                    <!-- System Info & About -->
+                    <!-- System Info -->
                     <div class="card">
                         <div class="card-header">
-                            <h3>ℹ️ System Information</h3>
+                            <h3>ℹ️ System</h3>
                         </div>
-                        <div class="system-info">
-                            <div class="info-row">
-                                <span class="info-label">Platform:</span>
-                                <span class="info-value">ADgents v1.0.0</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">Framework:</span>
-                                <span class="info-value">FastAPI + Python 3.10+</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">License:</span>
-                                <span class="info-value">Open Source (MIT)</span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">Repository:</span>
-                                <span class="info-value"><a href="https://github.com/CYBERBULL123/ADgents" target="_blank" style="color: var(--accent); word-break: break-all;">github.com/CYBERBULL123/ADgents</a></span>
-                            </div>
-                            <div class="info-row">
-                                <span class="info-label">Docs:</span>
-                                <span class="info-value"><a href="#" onclick="navigate('docs')" style="color: var(--accent);">View Documentation</a></span>
-                            </div>
-                        </div>
-                        <div style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
-                            <p style="margin: 0 0 1rem 0; font-size: 0.9rem; line-height: 1.5;"><strong>ADgents</strong> is an autonomous AI agent platform with unique personas, persistent memory, and real-world skills.</p>
-                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                                <span class="badge badge-purple">Autonomous</span>
-                                <span class="badge badge-blue">Multi-Agent</span>
-                                <span class="badge badge-green">Persistent Memory</span>
-                                <span class="badge badge-orange">Extensible</span>
-                            </div>
+                        <div style="display: grid; gap: 0.5rem; font-size: 0.9rem;">
+                            <div><strong>Platform:</strong> ADgents v1.0.0</div>
+                            <div><strong>Framework:</strong> FastAPI + Python 3.10+</div>
+                            <div><strong>License:</strong> Open Source (MIT)</div>
+                            <div><a href="https://github.com/CYBERBULL123/ADgents" target="_blank" style="color: var(--accent);">📚 GitHub Repository</a></div>
                         </div>
                     </div>
 
@@ -994,6 +973,326 @@
                         </div>
                         <div id="docs-content" class="md-content">
                             <div class="empty-state-small" style="text-align:left; padding:0">Loading documentation...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── ADK WORKFLOWS ── -->
+            <section class="page" id="page-adk">
+                <div class="page-header">
+                    <div class="page-title">🤖 ADK Workflows</div>
+                    <div class="page-description">Create and manage Google ADK agent workflows</div>
+                </div>
+
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>🆕 Create ADK Agent</h3>
+                        </div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="adk-agent-name">Agent Name</label>
+                                <input type="text" id="adk-agent-name" placeholder="e.g., ResearchAgent">
+                            </div>
+                            <div class="form-group">
+                                <label for="adk-agent-model">Model</label>
+                                <select id="adk-agent-model">
+                                    <option value="">Loading models...</option>
+                                </select>
+                            </div>
+                            <div class="form-group full-width">
+                                <label for="adk-agent-description">Description</label>
+                                <input type="text" id="adk-agent-description" placeholder="Brief description of the agent">
+                            </div>
+                            <div class="form-group full-width">
+                                <label for="adk-agent-instructions">Instructions</label>
+                                <textarea id="adk-agent-instructions" rows="3" placeholder="System instructions for the agent"></textarea>
+                            </div>
+                            <div class="form-group full-width">
+                                <button class="btn btn-primary" onclick="createADKAgent()">Create Agent</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>⚡ Create Workflow</h3>
+                        </div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="workflow-name">Workflow Name</label>
+                                <input type="text" id="workflow-name" placeholder="e.g., ResearchWorkflow">
+                            </div>
+                            <div class="form-group">
+                                <label for="workflow-type">Type</label>
+                                <select id="workflow-type">
+                                    <option value="sequential">Sequential</option>
+                                    <option value="parallel">Parallel</option>
+                                    <option value="loop">Loop</option>
+                                </select>
+                            </div>
+                            <div class="form-group full-width">
+                                <label for="workflow-agents">Agents (comma-separated)</label>
+                                <input type="text" id="workflow-agents" placeholder="agent1,agent2,agent3">
+                            </div>
+                            <div class="form-group" id="loop-condition-group" style="display:none;">
+                                <label for="loop-condition">Loop Condition</label>
+                                <input type="text" id="loop-condition" placeholder="e.g., result != 'done'">
+                            </div>
+                            <div class="form-group" id="max-iterations-group" style="display:none;">
+                                <label for="max-iterations">Max Iterations</label>
+                                <input type="number" id="max-iterations" value="10">
+                            </div>
+                            <div class="form-group full-width">
+                                <button class="btn btn-primary" onclick="createADKWorkflow()">Create Workflow</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🤖 ADK Agents</h3>
+                    </div>
+                    <div id="adk-agents-list" class="agent-grid">
+                        <div class="empty-state">
+                            <div class="empty-icon">🤖</div>
+                            <div class="empty-title">No ADK Agents</div>
+                            <div class="empty-description">Create your first Google ADK agent to get started</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>⚡ Test Agent</h3>
+                    </div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="test-agent-select">Select Agent</label>
+                            <select id="test-agent-select">
+                                <option value="">Choose an agent...</option>
+                            </select>
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="test-agent-input">Input</label>
+                            <textarea id="test-agent-input" rows="3" placeholder="Enter your query..."></textarea>
+                        </div>
+                        <div class="form-group full-width">
+                            <button class="btn btn-primary" onclick="testADKAgent()">Run Agent</button>
+                        </div>
+                        <div class="form-group full-width">
+                            <div id="adk-test-result" class="test-result" style="display:none;"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── CREW COLLABORATION ── -->
+            <section class="page" id="page-crews" style="padding-bottom: 40px;">
+                <div class="page-header">
+                    <div class="page-title">👥 Crew Management</div>
+                    <div class="page-description">Create and manage multi-agent teams for collaborative work</div>
+                </div>
+
+                <!-- Top Section: Create Crew (Full Width) -->
+                <div class="card" style="margin-bottom: 30px;">
+                    <div class="card-header">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 24px;">🆕</span>
+                            <div>
+                                <h3 style="margin: 0; font-size: 18px;">Create New Crew</h3>
+                                <p style="margin: 4px 0 0 0; font-size: 13px; color: var(--text-secondary);">Set up a new multi-agent team</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; padding: 20px;">
+                        <div class="form-group" style="grid-column: 1;">
+                            <label for="crew-name">Crew Name *</label>
+                            <input type="text" id="crew-name" placeholder="e.g., ResearchTeam" style="margin-top: 6px;">
+                        </div>
+                        <div class="form-group" style="grid-column: 2;">
+                            <label for="crew-organization">Organization</label>
+                            <input type="text" id="crew-organization" value="default" style="margin-top: 6px;">
+                        </div>
+                        <div class="form-group" style="grid-column: 3;">
+                            <label for="crew-protocol">Protocol</label>
+                            <select id="crew-protocol" style="margin-top: 6px;">
+                                <option value="a2a">Agent-to-Agent (A2A)</option>
+                                <option value="adk">Google ADK</option>
+                                <option value="rest">REST API</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="grid-column: 1 / -1;">
+                            <label for="crew-description">Description</label>
+                            <textarea id="crew-description" rows="2" placeholder="Brief description of the crew and its purpose" style="margin-top: 6px; resize: vertical;"></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Agent Selection Section -->
+                <div class="card" style="margin-bottom: 30px;">
+                    <div class="card-header">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 24px;">👤</span>
+                            <div>
+                                <h3 style="margin: 0; font-size: 18px;">Select Agents</h3>
+                                <p style="margin: 4px 0 0 0; font-size: 13px; color: var(--text-secondary);">Choose one or more agents to form the crew</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="padding: 20px;">
+                        <label for="crew-agents" style="display: block; margin-bottom: 10px; font-weight: 500;">Available Agents</label>
+                        <div id="crew-agents-wrapper" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px;">
+                            <select id="crew-agents" multiple style="display: none;">
+                                <!-- Agents will be loaded here -->
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" onclick="createCrew()" style="width: 100%; padding: 12px; font-size: 16px; font-weight: 600;">
+                            ✨ Create Crew
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Active Crews Section -->
+                <div class="card" style="margin-bottom: 30px;">
+                    <div class="card-header">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 24px;">👥</span>
+                            <div>
+                                <h3 style="margin: 0; font-size: 18px;">Your Crews</h3>
+                                <p style="margin: 4px 0 0 0; font-size: 13px; color: var(--text-secondary);">Manage existing crews and teams</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="crews-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; padding: 20px;">
+                        <div class="empty-state">
+                            <div class="empty-icon">👥</div>
+                            <div class="empty-title">No Crews Yet</div>
+                            <div class="empty-description">Create your first crew to get started</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Add Member Section -->
+                <div class="card" style="margin-bottom: 30px;">
+                    <div class="card-header">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 24px;">➕</span>
+                            <div>
+                                <h3 style="margin: 0; font-size: 18px;">Add Member to Crew</h3>
+                                <p style="margin: 4px 0 0 0; font-size: 13px; color: var(--text-secondary);">Expand existing crews with new agents</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 20px; padding: 20px;">
+                        <div class="form-group">
+                            <label for="member-crew-select">Select Crew</label>
+                            <select id="member-crew-select" style="margin-top: 6px;">
+                                <option value="">Choose a crew...</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="member-agent-select">Select Agent</label>
+                            <select id="member-agent-select" style="margin-top: 6px;">
+                                <option value="">Choose an agent...</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="member-role">Role</label>
+                            <select id="member-role" style="margin-top: 6px;">
+                                <option value="contributor">Contributor</option>
+                                <option value="leader">Leader</option>
+                                <option value="specialist">Specialist</option>
+                                <option value="coordinator">Coordinator</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="display: flex; flex-direction: column; justify-content: flex-end;">
+                            <button class="btn btn-primary" onclick="addCrewMember()" style="margin-top: 6px;">
+                                ➕ Add Member
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Crew Communications Section -->
+                <div class="card">
+                    <div class="card-header">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <span style="font-size: 24px;">💬</span>
+                            <div>
+                                <h3 style="margin: 0; font-size: 18px;">Crew Communications & Coordination</h3>
+                                <p style="margin: 4px 0 0 0; font-size: 13px; color: var(--text-secondary);">Send and monitor messages between crew members</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="padding: 20px;">
+                        <!-- Message Sending Section -->
+                        <div style="background: var(--bg-secondary); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+                            <h4 style="margin: 0 0 16px 0; color: var(--text-primary); font-size: 14px; font-weight: 600;">✉️ Send Message</h4>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                                <div class="form-group" style="margin: 0;">
+                                    <label style="font-size: 12px;">Select Crew</label>
+                                    <select id="send-msg-crew" style="margin-top: 4px; font-size: 13px;">
+                                        <option value="">Choose crew...</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="margin: 0;">
+                                    <label style="font-size: 12px;">From Agent</label>
+                                    <select id="send-msg-from" style="margin-top: 4px; font-size: 13px;">
+                                        <option value="">Select agent...</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="margin: 0;">
+                                    <label style="font-size: 12px;">To Agent</label>
+                                    <select id="send-msg-to" style="margin-top: 4px; font-size: 13px;">
+                                        <option value="">Select agent...</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="margin: 0;">
+                                    <label style="font-size: 12px;">Message Type</label>
+                                    <select id="msg-type" style="margin-top: 4px; font-size: 13px;">
+                                        <option value="task">Task</option>
+                                        <option value="query">Query</option>
+                                        <option value="update">Update</option>
+                                        <option value="request">Request</option>
+                                        <option value="response">Response</option>
+                                        <option value="alert">Alert</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 100px; gap: 12px;">
+                                <div class="form-group" style="margin: 0;">
+                                    <label style="font-size: 12px;">Message Content</label>
+                                    <textarea id="msg-content" placeholder="Enter message..." rows="2" style="margin-top: 4px; font-size: 13px; resize: vertical;"></textarea>
+                                </div>
+                                <div style="display: flex; flex-direction: column; gap: 8px; justify-content: flex-end;">
+                                    <button class="btn btn-primary" onclick="sendCrewMessage()" style="padding: 8px; font-size: 12px; font-weight: 600;">
+                                        📤 Send
+                                    </button>
+                                    <button class="btn btn-secondary" onclick="broadcastCrewMessage()" style="padding: 8px; font-size: 12px; font-weight: 600;">
+                                        📢 Broadcast
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Communications History Section -->
+                        <div>
+                            <h4 style="margin: 0 0 12px 0; color: var(--text-primary); font-size: 14px; font-weight: 600;">📋 Communications History</h4>
+                            <div style="display: grid; grid-template-columns: 1fr auto; gap: 12px; margin-bottom: 12px;">
+                                <div class="form-group" style="margin: 0;">
+                                    <label style="font-size: 12px;">View Communications for Crew</label>
+                                    <select id="view-comm-crew" style="margin-top: 4px; font-size: 13px;">
+                                        <option value="">Choose a crew...</option>
+                                    </select>
+                                </div>
+                                <button class="btn btn-secondary" onclick="loadCrewCommunications()" style="padding: 8px 16px; font-size: 12px; font-weight: 600; height: 36px; margin-top: 20px;">
+                                    🔄 Refresh
+                                </button>
+                            </div>
+                            <div id="crew-communications" style="background: var(--bg-secondary); border-radius: 8px; padding: 16px; max-height: 400px; overflow-y: auto; min-height: 80px; font-size: 13px; color: var(--text-secondary); border: 1px solid var(--border-color);"></div>
                         </div>
                     </div>
                 </div>
