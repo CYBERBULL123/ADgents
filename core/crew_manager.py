@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 CREWS_DIR = Path(__file__).parent.parent / "data" / "crews"
 TEMPLATES_DIR = Path(__file__).parent.parent / "data" / "templates"
+COMMS_FILE = CREWS_DIR / "communications.json"
 CREWS_DIR.mkdir(parents=True, exist_ok=True)
 TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -69,7 +70,7 @@ class CrewConfig:
     description: str = ""
     organization: str = "default"  # Organization this crew belongs to
     members: List[CrewMember] = field(default_factory=list)
-    communication_protocol: str = "a2a"  # a2a, adk, rest, websocket
+    communication_protocol: str = "a2a"  # a2a, rest, websocket
     max_parallel_tasks: int = 3
     task_queue_size: int = 10
     auto_sync: bool = True
@@ -124,6 +125,7 @@ class CrewManager:
         self.active_communications: Dict[str, Dict] = {}  # Track agent communications
         self.load_crews()
         self.load_templates()
+        self._load_communications()
         logger.info("✓ CrewManager initialized")
 
     # ─── Templates ───────────────────────────────────────────────────────────
@@ -317,18 +319,11 @@ class CrewManager:
     # ─── Agent-to-Agent Communication (A2A) ──────────────────────────────────
 
     async def send_message_between_agents(self, crew_id: str, from_agent: str,
-                                         to_agent: str, message: Dict[str, Any]) -> Dict:
+                                         to_agent: str, message: Dict[str, Any],
+                                         from_name: str = "", to_name: str = "",
+                                         message_type: str = "message") -> Dict:
         """
         Send a message between two agents in a crew via A2A protocol.
-        
-        Args:
-            crew_id: Crew ID
-            from_agent: Sending agent ID
-            to_agent: Receiving agent ID
-            message: Message content with 'type' and 'data' keys
-        
-        Returns:
-            Communication metadata
         """
         crew = self.crews.get(crew_id)
         if not crew:
@@ -339,21 +334,32 @@ class CrewManager:
         if from_agent not in agent_ids or to_agent not in agent_ids:
             return {"success": False, "error": "Agent not in crew"}
 
+        # Resolve names from members if not provided
+        if not from_name:
+            m = next((m for m in crew.members if m.agent_id == from_agent), None)
+            from_name = m.agent_name if m else from_agent[:8]
+        if not to_name:
+            m = next((m for m in crew.members if m.agent_id == to_agent), None)
+            to_name = m.agent_name if m else to_agent[:8]
+
         comm_id = str(uuid.uuid4())
         communication = {
             "id": comm_id,
             "crew_id": crew_id,
             "from": from_agent,
             "to": to_agent,
+            "from_name": from_name,
+            "to_name": to_name,
             "message": message,
+            "message_type": message_type,
             "protocol": crew.communication_protocol,
             "timestamp": datetime.now().isoformat(),
             "status": "sent"
         }
 
-        # Track active communication
         self.active_communications[comm_id] = communication
-        logger.info(f"✓ A2A Message: {from_agent} → {to_agent}")
+        self._save_communications()
+        logger.info(f"✓ A2A Message: {from_name} → {to_name} [{message_type}]")
 
         return {
             "success": True,
@@ -368,11 +374,16 @@ class CrewManager:
         if not crew:
             return {"success": False, "error": "Crew not found"}
 
+        from_member = next((m for m in crew.members if m.agent_id == from_agent), None)
+        from_name = from_member.agent_name if from_member else from_agent[:8]
+
         results = []
         for member in crew.members:
             if member.agent_id != from_agent:
                 result = await self.send_message_between_agents(
-                    crew_id, from_agent, member.agent_id, message
+                    crew_id, from_agent, member.agent_id, message,
+                    from_name=from_name, to_name=member.agent_name,
+                    message_type="broadcast",
                 )
                 results.append(result)
 
@@ -397,6 +408,24 @@ class CrewManager:
         ]
 
     # ─── Persistence ────────────────────────────────────────────────────────
+
+    def _load_communications(self):
+        """Load communications from disk."""
+        if COMMS_FILE.exists():
+            try:
+                with open(COMMS_FILE, "r", encoding="utf-8") as f:
+                    self.active_communications = json.load(f)
+                logger.info(f"✓ Loaded {len(self.active_communications)} communications")
+            except Exception as e:
+                logger.error(f"Error loading communications: {e}")
+
+    def _save_communications(self):
+        """Persist all communications to disk."""
+        try:
+            with open(COMMS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.active_communications, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving communications: {e}")
 
     def _save_crew(self, crew: CrewConfig):
         """Save crew to disk."""

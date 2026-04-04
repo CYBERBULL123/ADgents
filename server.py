@@ -56,7 +56,7 @@ from core.task_db import save_task, list_tasks, get_task, delete_task, task_stat
 from core.a2a_protocol import A2AProtocolManager, get_a2a_manager, A2AMessage
 from core.mcp_server import MCPServer
 from core.crew_manager import get_crew_manager
-from core.google_adk_integration import ADKIntegration
+
 
 # ─── Logger Setup ─────────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
@@ -147,19 +147,6 @@ class CreateCrewRequest(BaseModel):
     members: List[Dict[str, Any]] = []
     communication_protocol: str = "a2a"
 
-class CreateADKAgentRequest(BaseModel):
-    name: str
-    description: str = ""
-    model: str = "gemini-2.0-flash"
-    instructions: str = ""
-    tools: List[str] = []
-
-class CreateADKWorkflowRequest(BaseModel):
-    name: str
-    workflow_type: str  # "sequential", "parallel", "loop"
-    agents: List[str] = []
-    condition: Optional[str] = None
-    max_iterations: Optional[int] = 10
 
 # ─── App Setup ────────────────────────────────────────────────────────────────
 
@@ -225,8 +212,51 @@ agents: Dict[str, Agent] = {}
 for _p in load_all_personas():
     agents[_p.id] = Agent(persona=_p)
 
-# Initialize ADK Integration
-adk_integration = ADKIntegration()
+
+# ─── A2A Auto-Reply Engine ────────────────────────────────────────────────────
+
+async def _agent_auto_reply(
+    crew_id: str,
+    receiver_id: str,
+    sender_id: str,
+    sender_name: str,
+    receiver_name: str,
+    message_text: str,
+):
+    """
+    Background task: the receiving agent reads the message and replies autonomously
+    using the built-in ReAct LLM agent (agent.think).
+    """
+    try:
+        crew_mgr = get_crew_manager()
+
+        receiver_agent = agents.get(receiver_id)
+        if not receiver_agent:
+            logger.info(f"[A2A] Agent {receiver_id} not in registry – skipping auto-reply")
+            return
+
+        context = f"[A2A Message from {sender_name}]: {message_text}"
+
+        response_text = await asyncio.get_event_loop().run_in_executor(
+            None, receiver_agent.think, context
+        )
+
+        if not response_text:
+            return
+
+        await crew_mgr.send_message_between_agents(
+            crew_id=crew_id,
+            from_agent=receiver_id,
+            to_agent=sender_id,
+            message={"text": response_text, "type": "text"},
+            from_name=receiver_name,
+            to_name=sender_name,
+            message_type="response",
+        )
+        logger.info(f"[A2A] ✓ Auto-reply: {receiver_name} → {sender_name}")
+
+    except Exception as e:
+        logger.error(f"[A2A] Auto-reply error: {e}")
 
 
 # ─── Deep Agent Execution ─────────────────────────────────────────────────────
@@ -1190,7 +1220,7 @@ async def configure_llm(config: Dict[str, Any]):
             os.environ["OPENAI_API_KEY"] = api_key
         elif provider == "gemini":
             os.environ["GEMINI_API_KEY"] = api_key
-            os.environ["GOOGLE_API_KEY"] = api_key  # Also set for ADK compatibility
+
         elif provider == "claude":
             os.environ["ANTHROPIC_API_KEY"] = api_key
     
@@ -1704,61 +1734,77 @@ async def get_organization(org_id: str):
 # ─── Agent-to-Agent (A2A) Protocol ────────────────────────────────────────────
 
 @app.post("/api/a2a/send")
-async def send_a2a_message(req: SendA2AMessageRequest):
-    """Send a message between two agents via A2A protocol."""
+async def send_a2a_message(req: SendA2AMessageRequest, background_tasks: BackgroundTasks):
+    """Send a message between two agents via A2A protocol and trigger autonomous reply."""
     try:
         crew_mgr = get_crew_manager()
-        a2a_mgr = get_a2a_manager()
-        
-        # Verify crew and agents exist
+
         crew = crew_mgr.get_crew(req.crew_id)
         if not crew:
             return {"success": False, "error": "Crew not found"}
-        
+
         agent_ids = {m.agent_id for m in crew.members}
         if req.from_agent not in agent_ids or req.to_agent not in agent_ids:
             return {"success": False, "error": "Agent not in crew"}
-        
-        # Create A2A message
-        message = A2AMessage(
-            sender_id=req.from_agent,
-            receiver_id=req.to_agent,
-            crew_id=req.crew_id,
-            message_type=req.message_type,
-            content=req.content
-        )
-        
-        # Send via A2A protocol
+
+        # Resolve human-readable names
+        from_member = next((m for m in crew.members if m.agent_id == req.from_agent), None)
+        to_member = next((m for m in crew.members if m.agent_id == req.to_agent), None)
+        from_name = from_member.agent_name if from_member else req.from_agent[:8]
+        to_name = to_member.agent_name if to_member else req.to_agent[:8]
+
         result = await crew_mgr.send_message_between_agents(
             crew_id=req.crew_id,
             from_agent=req.from_agent,
             to_agent=req.to_agent,
-            message=req.content
+            message=req.content,
+            from_name=from_name,
+            to_name=to_name,
+            message_type=req.message_type,
         )
-        
+
+        # Trigger receiving agent to reply autonomously in background
+        message_text = req.content.get("text", str(req.content)) if isinstance(req.content, dict) else str(req.content)
+        background_tasks.add_task(
+            _agent_auto_reply,
+            req.crew_id, req.to_agent, req.from_agent,
+            from_name, to_name, message_text,
+        )
+
         return result
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 @app.post("/api/a2a/broadcast")
-async def broadcast_a2a_message(req: BroadcastA2AMessageRequest):
-    """Broadcast a message to all agents in a crew."""
+async def broadcast_a2a_message(req: BroadcastA2AMessageRequest, background_tasks: BackgroundTasks):
+    """Broadcast a message to all agents in a crew and trigger autonomous replies."""
     try:
         crew_mgr = get_crew_manager()
-        
-        # Verify crew exists
+
         crew = crew_mgr.get_crew(req.crew_id)
         if not crew:
             return {"success": False, "error": "Crew not found"}
-        
-        # Broadcast message
+
+        from_member = next((m for m in crew.members if m.agent_id == req.from_agent), None)
+        from_name = from_member.agent_name if from_member else req.from_agent[:8]
+
         result = await crew_mgr.broadcast_to_crew(
             crew_id=req.crew_id,
             from_agent=req.from_agent,
-            message=req.content
+            message=req.content,
         )
-        
+
+        # Each receiving agent replies autonomously
+        message_text = req.content.get("text", str(req.content)) if isinstance(req.content, dict) else str(req.content)
+        for member in crew.members:
+            if member.agent_id != req.from_agent:
+                background_tasks.add_task(
+                    _agent_auto_reply,
+                    req.crew_id, member.agent_id, req.from_agent,
+                    from_name, member.agent_name, message_text,
+                )
+
         return result
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -1877,84 +1923,6 @@ async def delete_crew(crew_id: str):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-# ─── Google ADK Endpoints ────────────────────────────────────────────────────
-
-@app.post("/api/adk/agents/create")
-async def create_adk_agent(req: CreateADKAgentRequest):
-    """Create a Google ADK agent."""
-    try:
-        agent = adk_integration.create_llm_agent(
-            name=req.name,
-            description=req.description,
-            model=req.model,
-            instructions=req.instructions,
-            tools=req.tools
-        )
-        return {
-            "success": True,
-            "agent": agent.get_agent_info(),
-            "message": f"ADK Agent created: {req.name}"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.get("/api/adk/agents")
-async def list_adk_agents():
-    """List all ADK agents."""
-    try:
-        agents = adk_integration.list_agents()
-        return {
-            "success": True,
-            "agents": agents,
-            "count": len(agents)
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.post("/api/adk/workflows/create")
-async def create_adk_workflow(req: CreateADKWorkflowRequest):
-    """Create an ADK workflow."""
-    try:
-        if req.workflow_type == "sequential":
-            workflow = adk_integration.create_sequential_workflow(
-                name=req.name,
-                agents_sequence=req.agents
-            )
-        elif req.workflow_type == "parallel":
-            workflow = adk_integration.create_parallel_workflow(
-                name=req.name,
-                agents_list=req.agents
-            )
-        elif req.workflow_type == "loop":
-            workflow = adk_integration.create_loop_workflow(
-                name=req.name,
-                agent=req.agents[0] if req.agents else "",
-                condition=req.condition,
-                max_iterations=req.max_iterations
-            )
-        else:
-            return {"success": False, "error": "Invalid workflow type"}
-
-        return {
-            "success": True,
-            "workflow": workflow,
-            "message": f"ADK Workflow created: {req.name}"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.post("/api/adk/agents/{agent_name}/run")
-async def run_adk_agent(agent_name: str, request: Dict[str, Any]):
-    """Run an ADK agent."""
-    try:
-        user_input = request.get("input", "")
-        result = await adk_integration.run_agent(agent_name, user_input)
-        return result
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
 # ─── MCP Endpoint ─────────────────────────────────────────────────────────────
 

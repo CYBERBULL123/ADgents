@@ -36,7 +36,7 @@ function navigate(page) {
         skills: ['Skills', 'Tools available to your agents'],
         files: ['Files', 'Browse and download agent-created files'],
         mcp: ['MCP Server', 'Model Context Protocol Integration'],
-        adk: ['ADK Workflows', 'Google ADK agent orchestration'],
+
         crews: ['Crew Collaboration', 'Multi-agent team coordination'],
         settings: ['Settings', 'Configure LLM providers and system'],
         docs: ['Documentation', 'Learn how to use ADgents']
@@ -50,7 +50,7 @@ function navigate(page) {
     if (page === 'agents') renderAgentsGrid();
     if (page === 'chat') renderChatPicker();
     if (page === 'tasks') populateTaskAgentSelect();
-    if (page === 'adk') loadADKPage();
+
     if (page === 'crews') loadCrewsPage();
     if (page === 'history') loadHistory();
     if (page === 'files') loadFiles();
@@ -2668,227 +2668,6 @@ async function stopMCPServer() {
 
 window.addEventListener('DOMContentLoaded', init);
 
-// ─── ADK Workflows ───────────────────────────────────────────────────────────
-
-async function loadADKPage() {
-    try {
-        // Load Gemini models for ADK agent creation (prefer Gemini, but show all available)
-        const modelSelect = document.getElementById('adk-agent-model');
-        if (modelSelect) {
-            modelSelect.innerHTML = '<option value="">⏳ Loading models...</option>';
-            
-            try {
-                // Try to get Gemini models specifically
-                const modelsResponse = await api('/llm/models/gemini');
-                if (modelsResponse.success && modelsResponse.models && modelsResponse.models.length > 0) {
-                    console.log('✓ Loaded Gemini models for ADK:', modelsResponse.models);
-                    modelSelect.innerHTML = '<option value="">-- Select a Gemini model --</option>';
-                    modelsResponse.models.forEach(model => {
-                        modelSelect.innerHTML += `<option value="${model}">${model}</option>`;
-                    });
-                } else {
-                    // Fallback if Gemini not available
-                    console.warn('Gemini models not available, using fallback');
-                    modelSelect.innerHTML = '<option value="gemini-1.5-flash" selected>Gemini 1.5 Flash</option><option value="gemini-1.5-pro">Gemini 1.5 Pro</option>';
-                }
-            } catch (e) {
-                console.error('Failed to load Gemini models:', e);
-                modelSelect.innerHTML = '<option value="gemini-1.5-flash" selected>Gemini 1.5 Flash (Default)</option>';
-            }
-        }
-        
-        // Load ADK agents
-        const agentsData = await api('/adk/agents');
-        renderADKAgentsList(agentsData.agents || []);
-        
-        // Populate test agent select
-        const testSelect = document.getElementById('test-agent-select');
-        if (testSelect) {
-            testSelect.innerHTML = '<option value="">Choose an agent...</option>';
-            (agentsData.agents || []).forEach(agent => {
-                testSelect.innerHTML += `<option value="${agent.name}">${agent.name}</option>`;
-            });
-        }
-        
-        // Update workflow type change handler
-        const workflowTypeSelect = document.getElementById('workflow-type');
-        if (workflowTypeSelect) {
-            workflowTypeSelect.addEventListener('change', function() {
-                const type = this.value;
-                const loopGroup = document.getElementById('loop-condition-group');
-                const maxIterGroup = document.getElementById('max-iterations-group');
-                
-                if (type === 'loop') {
-                    loopGroup.style.display = 'block';
-                    maxIterGroup.style.display = 'block';
-                } else {
-                    loopGroup.style.display = 'none';
-                    maxIterGroup.style.display = 'none';
-                }
-            });
-        }
-        
-    } catch (e) {
-        console.error('Failed to load ADK page:', e);
-        toast('Failed to load ADK data', 'error');
-    }
-}
-
-function renderADKAgentsList(agents) {
-    const listEl = document.getElementById('adk-agents-list');
-    if (!agents.length) {
-        listEl.innerHTML = '<div class="empty-state"><div class="empty-icon">🤖</div><div class="empty-title">No ADK Agents</div><div class="empty-description">Create your first Google ADK agent to get started</div></div>';
-        return;
-    }
-    
-    listEl.innerHTML = agents.map(agent => `
-        <div class="agent-card">
-            <div class="agent-card-header">
-                <span class="agent-avatar">🤖</span>
-                <div class="agent-info">
-                    <div class="agent-name">${escapeHtml(agent.name)}</div>
-                    <div class="agent-model">${escapeHtml(agent.model)}</div>
-                </div>
-                <div class="agent-status">
-                    <span class="badge ${agent.status === 'initialized' ? 'badge-green' : 'badge-yellow'}">
-                        ${agent.status === 'initialized' ? '✅ Ready' : '⏳ ' + agent.status}
-                    </span>
-                </div>
-            </div>
-            <div class="agent-description">${escapeHtml(agent.description || 'No description')}</div>
-            <div class="agent-stats">
-                <span>🛠️ ${agent.tools_count || 0} tools</span>
-                <span>🔗 ${agent.adk_available ? 'ADK Available' : 'ADK Unavailable'}</span>
-            </div>
-        </div>
-    `).join('');
-}
-
-async function createADKAgent() {
-    const name = document.getElementById('adk-agent-name').value.trim();
-    const description = document.getElementById('adk-agent-description').value.trim();
-    const model = document.getElementById('adk-agent-model').value;
-    const instructions = document.getElementById('adk-agent-instructions').value.trim();
-    
-    if (!name) {
-        toast('Agent name is required', 'error');
-        return;
-    }
-    
-    if (!model || model === '') {
-        toast('Please select a model', 'error');
-        return;
-    }
-    
-    try {
-        const data = await api('/adk/agents/create', 'POST', {
-            name, description, model, instructions, tools: []
-        });
-        
-        if (data.success) {
-            toast('ADK Agent created successfully!', 'success');
-            // Clear form
-            document.getElementById('adk-agent-name').value = '';
-            document.getElementById('adk-agent-description').value.trim();
-            document.getElementById('adk-agent-instructions').value = '';
-            // Reload page
-            loadADKPage();
-        } else {
-            toast(data.error || 'Failed to create agent', 'error');
-        }
-    } catch (e) {
-        toast('Failed to create ADK agent: ' + e.message, 'error');
-    }
-}
-
-async function createADKWorkflow() {
-    const name = document.getElementById('workflow-name').value.trim();
-    const type = document.getElementById('workflow-type').value;
-    const agents = document.getElementById('workflow-agents').value.trim().split(',').map(a => a.trim()).filter(a => a);
-    const condition = document.getElementById('loop-condition').value.trim();
-    const maxIterations = parseInt(document.getElementById('max-iterations').value) || 10;
-    
-    if (!name) {
-        toast('Workflow name is required', 'error');
-        return;
-    }
-    
-    if (!agents.length) {
-        toast('At least one agent is required', 'error');
-        return;
-    }
-    
-    try {
-        const data = await api('/adk/workflows/create', 'POST', {
-            name, workflow_type: type, agents, condition, max_iterations: maxIterations
-        });
-        
-        if (data.success) {
-            toast('ADK Workflow created successfully!', 'success');
-            // Clear form
-            document.getElementById('workflow-name').value = '';
-            document.getElementById('workflow-agents').value = '';
-            document.getElementById('loop-condition').value = '';
-            document.getElementById('max-iterations').value = '10';
-        } else {
-            toast(data.error || 'Failed to create workflow', 'error');
-        }
-    } catch (e) {
-        toast('Failed to create ADK workflow: ' + e.message, 'error');
-    }
-}
-
-async function testADKAgent() {
-    const agentName = document.getElementById('test-agent-select').value;
-    const input = document.getElementById('test-agent-input').value.trim();
-    
-    if (!agentName) {
-        toast('Please select an agent', 'error');
-        return;
-    }
-    
-    if (!input) {
-        toast('Please enter input text', 'error');
-        return;
-    }
-    
-    const resultEl = document.getElementById('adk-test-result');
-    resultEl.style.display = 'block';
-    resultEl.innerHTML = '<div style="text-align: center; color: var(--text-secondary);">⏳ Running agent...</div>';
-    
-    try {
-        const data = await api(`/adk/agents/${agentName}/run`, 'POST', { input });
-        
-        if (data.success) {
-            resultEl.innerHTML = `
-                <div style="margin-bottom: 1rem;">
-                    <strong>✅ Success</strong> - Model: ${escapeHtml(data.model)}, Agent: ${escapeHtml(data.agent_name)}
-                </div>
-                <div style="background: var(--bg-card-hover); padding: 1rem; border-radius: 8px; border: 1px solid var(--border);">
-                    ${renderMarkdown(data.output)}
-                </div>
-            `;
-        } else {
-            resultEl.innerHTML = `
-                <div style="margin-bottom: 1rem;">
-                    <strong style="color: var(--red);">❌ Error</strong>
-                </div>
-                <div style="background: rgba(239,68,68,0.1); padding: 1rem; border-radius: 8px; border: 1px solid rgba(239,68,68,0.3); color: var(--red);">
-                    ${escapeHtml(data.error)}
-                </div>
-            `;
-        }
-    } catch (e) {
-        resultEl.innerHTML = `
-            <div style="margin-bottom: 1rem;">
-                <strong style="color: var(--red);">❌ Network Error</strong>
-            </div>
-            <div style="background: rgba(239,68,68,0.1); padding: 1rem; border-radius: 8px; border: 1px solid rgba(239,68,68,0.3); color: var(--red);">
-                ${escapeHtml(e.message)}
-            </div>
-        `;
-    }
-}
 
 // ─── Crew Collaboration ──────────────────────────────────────────────────────
 
@@ -2923,21 +2702,22 @@ async function loadCrewsPage() {
                 
                 // Render as checkbox card
                 crewAgentsWrapper.innerHTML += `
-                    <label style="display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--bg-secondary); border: 2px solid transparent; border-radius: 8px; cursor: pointer; transition: all 0.2s; border-color: var(--border-color);">
-                        <input type="checkbox" value="${agent.id}" class="crew-agent-checkbox" style="width: 18px; height: 18px; cursor: pointer;">
-                        <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
-                            <span style="font-size: 24px;">${agent.persona.avatar || '👤'}</span>
-                            <span style="font-weight: 500; color: var(--text-primary);">${escapeHtml(agent.persona.name)}</span>
-                        </div>
+                    <label class="crew-agent-card" onclick="updateCrewAgentCard(this)">
+                        <input type="checkbox" value="${agent.id}" class="crew-agent-checkbox" style="display:none;">
+                        <span class="crew-agent-avatar">${agent.persona.avatar || '👤'}</span>
+                        <span class="crew-agent-name">${escapeHtml(agent.persona.name)}</span>
+                        <span class="crew-agent-check">✓</span>
                     </label>
                 `;
             });
-            
-            // Update select when checkboxes change
+
+            // Update select + badge when checkboxes change
             document.querySelectorAll('.crew-agent-checkbox').forEach(checkbox => {
                 checkbox.addEventListener('change', function() {
                     const selected = Array.from(document.querySelectorAll('.crew-agent-checkbox:checked')).map(cb => cb.value);
                     crewAgentsSelect.value = selected.join(',');
+                    const badge = document.getElementById('selected-agents-count');
+                    if (badge) badge.textContent = `${selected.length} selected`;
                 });
             });
         }
@@ -2972,8 +2752,19 @@ async function loadCrewsPage() {
             (crewsData.crews || []).forEach(crew => {
                 viewCommCrewSelect.innerHTML += `<option value="${crew.id}">${crew.name}</option>`;
             });
+            // Auto-select first crew and load data immediately
+            if (crewsData.crews && crewsData.crews.length > 0) {
+                viewCommCrewSelect.value = crewsData.crews[0].id;
+                refreshCrewTabs();
+            }
         }
-        
+
+        // Wire up tab buttons via JS (more reliable than inline onclick)
+        const tabHistory = document.getElementById('crew-tab-history');
+        const tabResults = document.getElementById('crew-tab-results');
+        if (tabHistory) tabHistory.onclick = () => switchCrewTab('history');
+        if (tabResults) tabResults.onclick = () => switchCrewTab('results');
+
     } catch (e) {
         console.error('Failed to load crews page:', e);
         toast('Failed to load crews data', 'error');
@@ -2982,6 +2773,13 @@ async function loadCrewsPage() {
 
 function renderCrewsList(crews) {
     const listEl = document.getElementById('crews-list');
+    // Update stats bar
+    const totalMembers = (crews || []).reduce((s, c) => s + (c.members ? c.members.length : 0), 0);
+    const countEl = document.getElementById('stat-crew-count');
+    const memberEl = document.getElementById('stat-member-count');
+    if (countEl) countEl.textContent = crews.length;
+    if (memberEl) memberEl.textContent = totalMembers;
+
     if (!crews.length) {
         listEl.innerHTML = '<div class="empty-state"><div class="empty-icon">👥</div><div class="empty-title">No Crews Yet</div><div class="empty-description">Create your first crew to get started</div></div>';
         return;
@@ -2989,73 +2787,60 @@ function renderCrewsList(crews) {
     
     listEl.innerHTML = crews.map(crew => {
         const memberCount = crew.members ? crew.members.length : 0;
-        const protocolIcons = { 'a2a': '🔗', 'adk': '🌐', 'rest': '📡' };
+        const protocolIcons = { 'a2a': '🔗', 'rest': '📡' };
         const protocolIcon = protocolIcons[crew.communication_protocol] || '🔗';
         
         return `
-            <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; transition: all 0.3s ease;">
-                <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px;">
-                    <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
-                        <div style="width: 48px; height: 48px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 24px;">
-                            👥
-                        </div>
-                        <div style="flex: 1;">
-                            <div style="font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">
-                                ${escapeHtml(crew.name)}
-                            </div>
-                            <div style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
-                                <span>${protocolIcon} ${escapeHtml(crew.communication_protocol).toUpperCase()}</span>
-                                <span style="color: var(--text-tertiary);">•</span>
-                                <span>🏢 ${escapeHtml(crew.organization || 'default')}</span>
-                            </div>
+            <div class="crew-card-item">
+                <div class="crew-card-top">
+                    <div class="crew-card-avatar">👥</div>
+                    <div class="crew-card-info">
+                        <div class="crew-card-name">${escapeHtml(crew.name)}</div>
+                        <div class="crew-card-meta">
+                            <span>${protocolIcon} ${escapeHtml(crew.communication_protocol || 'a2a').toUpperCase()}</span>
+                            <span class="crew-meta-dot">·</span>
+                            <span>🏢 ${escapeHtml(crew.organization || 'default')}</span>
                         </div>
                     </div>
-                    <div style="background: #4CAF50; color: white; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; white-space: nowrap;">
-                        ✅ Active
-                    </div>
+                    <span class="crew-active-badge">● Active</span>
                 </div>
-                
-                <div style="background: var(--bg-secondary); border-radius: 8px; padding: 12px; margin-bottom: 16px; min-height: 40px;">
-                    <div style="font-size: 13px; color: var(--text-primary); line-height: 1.5;">
-                        ${escapeHtml(crew.description || 'No description provided')}
-                    </div>
+                ${crew.description ? `<div class="crew-card-desc">${escapeHtml(crew.description)}</div>` : ''}
+                <div class="crew-card-stats">
+                    <div class="crew-card-stat"><span class="crew-card-stat-val">${memberCount}</span><span class="crew-card-stat-lbl">Members</span></div>
+                    <div class="crew-card-stat"><span class="crew-card-stat-val">${protocolIcon}</span><span class="crew-card-stat-lbl">Protocol</span></div>
                 </div>
-                
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
-                    <div style="background: var(--bg-secondary); border-radius: 8px; padding: 10px; text-align: center;">
-                        <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px;">MEMBERS</div>
-                        <div style="font-size: 18px; font-weight: 700; color: var(--text-primary);">${memberCount}</div>
-                    </div>
-                    <div style="background: var(--bg-secondary); border-radius: 8px; padding: 10px; text-align: center;">
-                        <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px;">PROTOCOL</div>
-                        <div style="font-size: 16px;">${protocolIcon}</div>
-                    </div>
-                </div>
-                
                 ${memberCount > 0 ? `
-                    <div style="margin-bottom: 16px;">
-                        <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px;">Team Members:</div>
-                        <div style="display: flex; flex-wrap: wrap; gap: 6px;">
-                            ${(crew.members || []).map(m => `
-                                <span style="background: var(--bg-secondary); padding: 4px 10px; border-radius: 16px; font-size: 12px; color: var(--text-primary);">
-                                    👤 ${escapeHtml(m.agent_name || 'Unknown')}
-                                </span>
-                            `).join('')}
-                        </div>
+                    <div class="crew-members-row">
+                        ${(crew.members || []).map(m => `<span class="crew-member-chip">👤 ${escapeHtml(m.agent_name || 'Unknown')}</span>`).join('')}
                     </div>
                 ` : ''}
-                
-                <div style="display: flex; gap: 8px; padding-top: 16px; border-top: 1px solid var(--border-color);">
-                    <button onclick="deleteCrew('${crew.id}')" style="flex: 1; padding: 10px; background: #ff5252; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s;">
-                        🗑️ Delete
-                    </button>
-                    <button style="flex: 1; padding: 10px; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;">
-                        📊 Details
-                    </button>
+                <div class="crew-card-actions">
+                    <button class="btn btn-danger" onclick="deleteCrew('${crew.id}')" style="flex:1;padding:8px;font-size:12px;">🗑️ Delete</button>
+                    <button class="btn btn-ghost" style="flex:1;padding:8px;font-size:12px;">📊 Details</button>
                 </div>
             </div>
         `;
     }).join('');
+}
+
+// Agent card toggle helper
+function updateCrewAgentCard(labelEl) {
+    const cb = labelEl.querySelector('.crew-agent-checkbox');
+    if (!cb) return;
+    // Toggle happens after click naturally, read the new state
+    setTimeout(() => {
+        labelEl.classList.toggle('crew-agent-selected', cb.checked);
+    }, 0);
+}
+
+// Protocol picker helper for crew creation UI
+function setCrewProtocol(proto) {
+    const sel = document.getElementById('crew-protocol');
+    if (sel) sel.value = proto;
+    ['a2a', 'rest'].forEach(p => {
+        const el = document.getElementById(`proto-${p}`);
+        if (el) el.classList.toggle('crews-protocol-active', p === proto);
+    });
 }
 
 async function createCrew() {
@@ -3189,11 +2974,13 @@ async function loadCrewCommunications() {
         
         if (data.success && data.communications && data.communications.length > 0) {
             commsEl.innerHTML = data.communications.map((comm, idx) => {
-                // Communications have fields: id, crew_id, from, to, message, protocol, timestamp, status
-                const fromAgent = comm.from || comm.sender_id || 'Unknown';
-                const toAgent = comm.to || comm.receiver_id || 'Unknown';
-                
-                // Extract content text - it can be a dict or a string
+                // Prefer human-readable names, fall back to truncated IDs
+                const fromRaw = comm.from || comm.sender_id || 'Unknown';
+                const toRaw   = comm.to   || comm.receiver_id || 'Unknown';
+                const fromAgent = comm.from_name || fromRaw;
+                const toAgent   = comm.to_name   || toRaw;
+
+                // Extract content text
                 let contentText = 'No content';
                 if (comm.message) {
                     if (typeof comm.message === 'string') {
@@ -3208,26 +2995,32 @@ async function loadCrewCommunications() {
                         contentText = comm.content.text;
                     }
                 }
-                
-                const msgType = comm.message_type || 'message';
-                const timestamp = comm.timestamp ? new Date(comm.timestamp).toLocaleString() : 'Just now';
-                
+
+                const msgType  = comm.message_type || 'message';
+                const isReply  = msgType === 'response';
+                const isBcast  = msgType === 'broadcast';
+                const borderColor = isReply ? '#22c55e' : isBcast ? '#f59e0b' : 'var(--accent)';
+                const typeBg      = isReply ? 'rgba(34,197,94,0.15)' : isBcast ? 'rgba(245,158,11,0.15)' : 'var(--bg-secondary)';
+                const typeColor   = isReply ? '#22c55e' : isBcast ? '#f59e0b' : 'var(--text-secondary)';
+                const typeLabel   = isReply ? '🤖 auto-reply' : isBcast ? '📢 broadcast' : msgType;
+                const timestamp   = comm.timestamp ? new Date(comm.timestamp).toLocaleString() : 'Just now';
+
                 return `
-                    <div style="border-left: 3px solid var(--accent); background: var(--card-bg); border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+                    <div style="border-left: 3px solid ${borderColor}; background: var(--card-bg); border-radius: 6px; padding: 12px; margin-bottom: 10px;">
                         <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
-                            <div style="display: flex; gap: 8px; align-items: center;">
+                            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                                 <span style="font-weight: 600; color: var(--text-primary);">${escapeHtml(fromAgent)}</span>
                                 <span style="color: var(--text-secondary);">→</span>
                                 <span style="font-weight: 600; color: var(--text-primary);">${escapeHtml(toAgent)}</span>
-                                <span style="background: var(--bg-secondary); padding: 2px 8px; border-radius: 12px; font-size: 11px; color: var(--text-secondary);">
-                                    ${escapeHtml(msgType)}
+                                <span style="background: ${typeBg}; padding: 2px 8px; border-radius: 12px; font-size: 11px; color: ${typeColor}; font-weight: 500;">
+                                    ${escapeHtml(typeLabel)}
                                 </span>
                             </div>
-                            <span style="font-size: 12px; color: var(--text-secondary);">
+                            <span style="font-size: 12px; color: var(--text-secondary); white-space: nowrap; margin-left: 8px;">
                                 ${timestamp}
                             </span>
                         </div>
-                        <div style="color: var(--text-primary); line-height: 1.4; word-wrap: break-word;">
+                        <div style="color: var(--text-primary); line-height: 1.5; word-wrap: break-word; white-space: pre-wrap;">
                             ${escapeHtml(contentText)}
                         </div>
                     </div>
@@ -3239,6 +3032,110 @@ async function loadCrewCommunications() {
     } catch (e) {
         commsEl.innerHTML = `<div style="text-align: center; color: var(--red);">❌ Failed to load communications</div>`;
         console.error('Error loading communications:', e);
+    }
+}
+
+// ── Crew tab switcher ───────────────────────────────────────────────────────
+
+let _activeCrewTab = 'history';
+
+function switchCrewTab(tab) {
+    _activeCrewTab = tab;
+    ['history', 'results'].forEach(t => {
+        const btn   = document.getElementById(`crew-tab-${t}`);
+        const panel = document.getElementById(`crew-panel-${t}`);
+        if (!btn || !panel) return;
+        const active = t === tab;
+        btn.style.color        = active ? 'var(--accent)' : 'var(--text-secondary)';
+        btn.style.borderBottom = active ? '3px solid var(--accent)' : '3px solid transparent';
+        panel.style.display    = active ? 'block' : 'none';
+    });
+}
+
+function refreshCrewTabs() {
+    loadCrewCommunications();
+    loadCrewResults();
+}
+
+// ── Results tab ─────────────────────────────────────────────────────────────
+
+async function loadCrewResults() {
+    const crewId = document.getElementById('view-comm-crew').value.trim();
+    const resultsEl = document.getElementById('crew-results');
+    if (!resultsEl) return;
+
+    if (!crewId) {
+        resultsEl.innerHTML = '<div style="text-align:center; color: var(--text-secondary); padding: 20px;">Select a crew first.</div>';
+        return;
+    }
+
+    resultsEl.innerHTML = '<div style="text-align: center; color: var(--text-secondary);">⏳ Loading results...</div>';
+
+    try {
+        const data = await api(`/a2a/communications/${crewId}`);
+        if (!data.success) throw new Error(data.error || 'Failed');
+
+        const all    = data.communications || [];
+        // Index all messages by their id for quick lookup
+        const byId   = {};
+        all.forEach(c => byId[c.id] = c);
+
+        // Only auto-reply results
+        const replies = all.filter(c => c.message_type === 'response');
+
+        if (replies.length === 0) {
+            resultsEl.innerHTML = '<div style="text-align:center; color: var(--text-secondary); padding: 20px;">No agent results yet. Send a message and agents will reply automatically.</div>';
+            return;
+        }
+
+        function getText(comm) {
+            if (!comm) return '';
+            const m = comm.message;
+            if (!m) return '';
+            if (typeof m === 'string') return m;
+            if (m.text) return m.text;
+            return JSON.stringify(m);
+        }
+
+        resultsEl.innerHTML = replies.map((reply, i) => {
+            const agentName = reply.from_name || reply.from || 'Agent';
+            const queryText = getText(reply);  // the reply content
+            const ts        = reply.timestamp ? new Date(reply.timestamp).toLocaleString() : '';
+
+            // Find the original message this is a reply to (sent to this agent before)
+            const original = all.find(c =>
+                c.to === reply.from &&
+                c.from === reply.to &&
+                c.message_type !== 'response' &&
+                new Date(c.timestamp) < new Date(reply.timestamp)
+            );
+            const originalText = original ? getText(original) : null;
+
+            return `
+                <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-left: 4px solid #22c55e; border-radius: 8px; padding: 14px; margin-bottom: 14px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 18px;">🤖</span>
+                            <span style="font-weight: 700; color: var(--text-primary); font-size: 14px;">${escapeHtml(agentName)}</span>
+                            <span style="background: rgba(34,197,94,0.15); color: #22c55e; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px;">Result #${i + 1}</span>
+                        </div>
+                        <span style="font-size: 11px; color: var(--text-secondary);">${ts}</span>
+                    </div>
+                    ${originalText ? `
+                    <div style="background: var(--bg-secondary); border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; color: var(--text-secondary); border-left: 2px solid var(--border-color);">
+                        <span style="font-weight: 600; display: block; margin-bottom: 2px;">💬 Original query</span>
+                        ${escapeHtml(originalText)}
+                    </div>` : ''}
+                    <div style="color: var(--text-primary); line-height: 1.6; white-space: pre-wrap; font-size: 13px;">
+                        ${escapeHtml(queryText)}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+    } catch (e) {
+        resultsEl.innerHTML = `<div style="text-align:center; color: var(--red);">❌ Failed to load results</div>`;
+        console.error('Error loading crew results:', e);
     }
 }
 
@@ -3354,10 +3251,14 @@ async function sendCrewMessage() {
         console.log('[API] Response:', data);
         
         if (data.success) {
-            toast('✅ Message sent successfully!', 'success');
+            toast('✅ Message sent! Waiting for agent reply…', 'success');
             document.getElementById('msg-content').value = '';
-            // Reload communications history
+            // Sync the view-crew selector so tabs show this crew
+            const viewSel = document.getElementById('view-comm-crew');
+            if (viewSel && crewId) viewSel.value = crewId;
             await loadCrewCommunications();
+            // Agent replies asynchronously — refresh again after a short delay
+            setTimeout(() => refreshCrewTabs(), 2500);
         } else {
             toast('❌ ' + (data.error || 'Failed to send message'), 'error');
         }
@@ -3411,10 +3312,12 @@ async function broadcastCrewMessage() {
         console.log('[API] Response:', data);
         
         if (data.success) {
-            toast('✅ Message broadcast to all crew members!', 'success');
+            toast('✅ Broadcast sent! Agents are replying…', 'success');
             document.getElementById('msg-content').value = '';
-            // Reload communications history
+            const viewSel = document.getElementById('view-comm-crew');
+            if (viewSel && crewId) viewSel.value = crewId;
             await loadCrewCommunications();
+            setTimeout(() => refreshCrewTabs(), 3000);
         } else {
             toast('❌ ' + (data.error || 'Failed to broadcast message'), 'error');
         }
