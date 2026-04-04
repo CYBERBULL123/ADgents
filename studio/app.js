@@ -2581,29 +2581,21 @@ async function loadMCPPage() {
             }
         }
         
-        // Load and display tools
+        // Load and display tools as compact chips
         if (toolsList) {
             if (statusData.tool_names && statusData.tool_names.length > 0) {
-                toolsList.innerHTML = statusData.tool_names.map(name => `
-                    <div style="padding: 0.75rem; background: var(--bg-input); border-radius: var(--radius-sm);">
-                        <div style="font-weight: 500; color: var(--text-primary);">🔧 ${escapeHtml(name)}</div>
-                    </div>
-                `).join('');
+                toolsList.innerHTML = `<div class="mcp-chip-list">${statusData.tool_names.map(name => `<span class="mcp-chip mcp-chip-tool">🔧 ${escapeHtml(name)}</span>`).join('')}</div>`;
             } else {
-                toolsList.innerHTML = '<div style="padding: 1rem; text-align: center; color: var(--text-secondary);">No skills available as tools</div>';
+                toolsList.innerHTML = '<div class="mcp-loading">No skills available as tools</div>';
             }
         }
-        
-        // Load and display agents
+
+        // Load and display agents as compact chips
         if (agentsList) {
             if (statusData.agent_names && statusData.agent_names.length > 0) {
-                agentsList.innerHTML = statusData.agent_names.map(name => `
-                    <div style="padding: 0.75rem; background: var(--bg-input); border-radius: var(--radius-sm); display: flex; align-items: center;">
-                        <div style="font-weight: 500; color: var(--text-primary);">🤖 ${escapeHtml(name)}</div>
-                    </div>
-                `).join('');
+                agentsList.innerHTML = `<div class="mcp-chip-list">${statusData.agent_names.map(name => `<span class="mcp-chip mcp-chip-agent">🤖 ${escapeHtml(name)}</span>`).join('')}</div>`;
             } else {
-                agentsList.innerHTML = '<div style="padding: 1rem; text-align: center; color: var(--text-secondary);">No agents configured</div>';
+                agentsList.innerHTML = '<div class="mcp-loading">No agents configured</div>';
             }
         }
         

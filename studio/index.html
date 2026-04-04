@@ -782,76 +782,75 @@
                 <div class="page-header">
                     <div>
                         <div class="page-title">🔗 MCP Server</div>
-                        <div class="breadcrumb">Model Context Protocol for LLM Integration</div>
+                        <div class="page-description">Model Context Protocol for LLM Integration</div>
                     </div>
                 </div>
 
-                <div class="two-col">
-                    <!-- Status -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3>📊 Server Status</h3>
-                        </div>
-                        <div id="mcp-status" style="padding: 1rem;">
-                            <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
-                                Loading...
+                <div class="mcp-layout">
+                    <!-- Top Row: Status + Config -->
+                    <div class="two-col">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>📊 Server Status</h3>
+                            </div>
+                            <div id="mcp-status">
+                                <div class="mcp-loading">Loading...</div>
+                            </div>
+                            <div class="mcp-server-actions">
+                                <button class="btn btn-primary" onclick="startMCPServer()" id="btn-start-mcp">▶️ Start Server</button>
+                                <button class="btn btn-danger" onclick="stopMCPServer()" id="btn-stop-mcp" style="display:none;">⏹️ Stop Server</button>
+                                <button class="btn btn-ghost" onclick="loadMCPPage()">🔄 Refresh</button>
                             </div>
                         </div>
-                        <div style="display: flex; gap: 0.5rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);">
-                            <button class="btn btn-primary" onclick="startMCPServer()" id="btn-start-mcp">▶️ Start Server</button>
-                            <button class="btn btn-danger" onclick="stopMCPServer()" id="btn-stop-mcp" style="display:none;">⏹️ Stop Server</button>
-                            <button class="btn btn-ghost" onclick="loadMCPPage()">🔄 Refresh</button>
+
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>⚙️ Configuration</h3>
+                            </div>
+                            <div class="form-group">
+                                <label for="mcp-mode">Mode</label>
+                                <select id="mcp-mode">
+                                    <option value="stdio">stdio (Claude Desktop)</option>
+                                    <option value="sse">SSE (Web Clients)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="mcp-port">Port (for SSE)</label>
+                                <input type="number" id="mcp-port" value="8001" min="1024" max="65535" />
+                            </div>
+                            <button class="btn btn-primary" onclick="saveMCPConfig()" style="width:100%;margin-top:0.5rem;">💾 Save Config</button>
                         </div>
                     </div>
 
-                    <!-- Configuration -->
-                    <div class="card">
+                    <!-- Tools + Agents Row -->
+                    <div class="two-col">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>🔨 Available Skills as MCP Tools</h3>
+                            </div>
+                            <div id="mcp-tools-list" class="mcp-list">
+                                <div class="mcp-loading">Loading...</div>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>🤖 Available Agents</h3>
+                            </div>
+                            <div id="mcp-agents-list" class="mcp-list">
+                                <div class="mcp-loading">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Claude Desktop Integration -->
+                    <div class="card mcp-integration-card">
                         <div class="card-header">
-                            <h3>⚙️ Configuration</h3>
+                            <h3>📋 Claude Desktop Integration</h3>
                         </div>
-                        <div class="form-group">
-                            <label for="mcp-mode">Mode</label>
-                            <select id="mcp-mode" class="form-input">
-                                <option value="stdio">stdio (Claude Desktop)</option>
-                                <option value="sse">SSE (Web Clients)</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="mcp-port">Port (for SSE)</label>
-                            <input type="number" id="mcp-port" value="8001" min="1024" max="65535" class="form-input" />
-                        </div>
-                        <button class="btn btn-primary" onclick="saveMCPConfig()" style="width:100%;">💾 Save Config</button>
-                    </div>
-                </div>
-
-                <!-- Available Tools -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3>🔨 Available Skills as MCP Tools</h3>
-                    </div>
-                    <div id="mcp-tools-list" style="display: grid; gap: 0.5rem; max-height: 400px; overflow-y: auto;">
-                        <div style="text-align: center; padding: 1rem; color: var(--text-secondary);">Loading...</div>
-                    </div>
-                </div>
-
-                <!-- Available Agents -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3>🤖 Available Agents</h3>
-                    </div>
-                    <div id="mcp-agents-list" style="display: grid; gap: 0.5rem;">
-                        <div style="text-align: center; padding: 1rem; color: var(--text-secondary);">Loading...</div>
-                    </div>
-                </div>
-
-                <!-- Connection Instructions -->
-                <div class="card" style="background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2);">
-                    <div class="card-header">
-                        <h3>📋 Claude Desktop Integration</h3>
-                    </div>
-                    <p style="margin: 0 0 0.75rem 0; font-size: 0.9rem; color: var(--text-secondary);">Add this to your Claude config to access ADgents skills:</p>
-                    <div style="background: var(--bg-input); padding: 1rem; border-radius: var(--radius-sm); font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; overflow-x: auto;">
-                        <code style="color: var(--text-primary);">{
+                        <p class="mcp-integration-desc">Add this to your Claude config to access ADgents skills:</p>
+                        <div class="mcp-code-block">
+                            <code>{
   "mcpServers": {
     "adgents": {
       "command": "python",
@@ -859,10 +858,7 @@
     }
   }
 }</code>
-                    </div>
-                </div>
-            </section>
-                        <!-- Tools will be injected here -->
+                        </div>
                     </div>
                 </div>
             </section>

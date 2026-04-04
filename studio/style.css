@@ -3863,6 +3863,94 @@ textarea {
   opacity: 1;
 }
 
+/* ─── Page Layout Helpers (skills / mcp / crews) ─────────────────────── */
+
+/* Consistent flex-column layout for MCP and Crews pages */
+.mcp-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* The two-col grid needs gap when used inside page layouts */
+.mcp-layout .two-col {
+  gap: 1.5rem;
+}
+
+.mcp-server-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.mcp-list {
+  min-height: 40px;
+}
+
+.mcp-loading {
+  text-align: center;
+  padding: 1.5rem 1rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.mcp-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.mcp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.mcp-chip-tool {
+  background: rgba(124, 58, 237, 0.1);
+  border: 1px solid rgba(124, 58, 237, 0.25);
+  color: var(--purple);
+}
+
+.mcp-chip-agent {
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  color: var(--green);
+}
+
+.mcp-integration-card {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.06), rgba(37, 99, 235, 0.04)) !important;
+  border: 1px solid rgba(139, 92, 246, 0.2) !important;
+}
+
+.mcp-integration-desc {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin: 0 0 0.75rem 0;
+}
+
+.mcp-code-block {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  overflow-x: auto;
+  white-space: pre;
+}
+
 /* ─── MCP Server Styles ───────────────────────────────────────────────── */
 #page-mcp .card {
   background: linear-gradient(135deg, rgba(124, 58, 237, 0.05) 0%, rgba(37, 99, 235, 0.05) 100%);
