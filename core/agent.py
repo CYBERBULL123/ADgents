@@ -462,17 +462,27 @@ I'll use my available tools to complete this task autonomously."""
         return self.persona.id
     
     def stats(self) -> Dict[str, Any]:
+        # Count only skills assigned to this agent, not all available skills
+        all_skills = self.skill_registry.list()
+        assigned_skills = self.persona.skills or [s.name for s in all_skills]
+        assigned_count = len([s.name for s in all_skills if s.name in assigned_skills])
+        
         return {
             "name": self.name,
             "id": self.id,
             "role": self.persona.role,
             "status": self.status.value,
             "memory": self.memory.stats(),
-            "skills": len(self.skill_registry.list()),
+            "skills": assigned_count,
             "llm_providers": self.llm.available_providers()
         }
     
     def to_dict(self) -> Dict:
+        # Return only skills assigned to this agent, not all available skills
+        all_skills = self.skill_registry.list()
+        assigned_skills = self.persona.skills or [s.name for s in all_skills]
+        assigned_skill_names = [s.name for s in all_skills if s.name in assigned_skills]
+        
         return {
             "id": self.id,
             "name": self.name,
@@ -480,7 +490,7 @@ I'll use my available tools to complete this task autonomously."""
             "status": self.status.value,
             "is_deep_agent": self.is_deep_agent,
             "memory_stats": self.memory.stats(),
-            "available_skills": [s.name for s in self.skill_registry.list()]
+            "available_skills": assigned_skill_names
         }
 
 

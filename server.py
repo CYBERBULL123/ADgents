@@ -344,7 +344,16 @@ def _run_deep_agent(agent: Agent, task: str, max_iterations: int, on_thought_cal
         import inspect
         
         tools = []
-        for skill in agent.skill_registry.list():
+        # Only use skills assigned to this agent
+        all_skills = agent.skill_registry.list()
+        assigned_skill_names = set(agent.persona.skills or [s.name for s in all_skills])
+        
+        for skill in all_skills:
+            # Skip skills not assigned to this agent
+            if skill.name not in assigned_skill_names:
+                logger.info(f"[Deep Agent Tool] Skipping unassigned skill: {skill.name}")
+                continue
+                
             try:
                 skill_name = skill.name
                 skill_desc = skill.description or "Execute skill"
@@ -368,7 +377,7 @@ def _run_deep_agent(agent: Agent, task: str, max_iterations: int, on_thought_cal
                         # No parameters - shouldn't happen but handle it
                         def no_param_tool() -> str:
                             try:
-                                result = handler({})
+                                result = handler()
                                 logger.info(f"[Skill {name}] Success")
                                 return str(result)
                             except Exception as e:
@@ -385,7 +394,7 @@ def _run_deep_agent(agent: Agent, task: str, max_iterations: int, on_thought_cal
                             try:
                                 # Extract the value from kwargs using the actual parameter name
                                 value = kwargs.get(param_name, kwargs.get('query', kwargs.get('text', '')))
-                                result = handler({param_name: value})
+                                result = handler(**{param_name: value})
                                 logger.info(f"[Skill {name}] Success")
                                 return str(result)
                             except Exception as e:
@@ -411,7 +420,7 @@ def _run_deep_agent(agent: Agent, task: str, max_iterations: int, on_thought_cal
                                         args[pname] = kwargs.get(pname, 5)  # Default values
                                 
                                 logger.info(f"[Skill {name}] Calling with args: {args}")
-                                result = handler(args)
+                                result = handler(**args)
                                 logger.info(f"[Skill {name}] Success")
                                 return str(result)
                             except Exception as e:
