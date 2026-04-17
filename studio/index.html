@@ -264,6 +264,10 @@
 
             <!-- ── AGENTS ── -->
             <section class="page" id="page-agents">
+                <div style="margin-bottom: 1.5rem;">
+                    <h2 style="margin: 0 0 0.5rem 0; color: var(--text-primary);">Your Agents</h2>
+                    <p style="margin: 0; font-size: 0.9rem; color: var(--text-secondary);">Manage and organize all your AI agents</p>
+                </div>
                 <div class="agents-toolbar">
                     <input type="text" class="search-input" placeholder="🔍 Search agents..." id="agent-search"
                         oninput="filterAgents(this.value)" />
@@ -368,18 +372,6 @@
                                     <label>Available Skills</label>
                                     <div class="skills-checkbox-grid" id="build-skills-grid"></div>
                                 </div>
-
-                                <div class="form-group full-width" style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
-                                    <div style="display: flex; align-items: center; gap: 1rem; cursor: pointer;" onclick="toggleDeepAgent()">
-                                        <input type="checkbox" id="build-deep-agent" style="width: 20px; height: 20px; cursor: pointer;" />
-                                        <div style="flex: 1;">
-                                            <label style="font-weight: 600; color: var(--text-primary); cursor: pointer; margin: 0;">Enable Deep Agent (Advanced)</label>
-                                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.3rem;">
-                                                🧠 Unlock LangChain's advanced capabilities: ReAct loops, tool use, multi-step reasoning
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
                             </div>
 
                             <div class="builder-actions">
@@ -447,23 +439,15 @@
             <!-- ── TASKS ── -->
             <section class="page" id="page-tasks">
 
-                <!-- Task Mode Tabs -->
-                <div class="task-tabs-header" style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; border-bottom: 2px solid var(--border); padding-bottom: 0; position: relative; z-index: 10;">
-                    <button class="task-tab-btn active" id="tab-normal-agent" onclick="switchTaskTab('normal'); return false;" style="padding: 1rem 1.5rem; border: none; background: none; color: var(--text-primary); font-weight: 600; cursor: pointer; border-bottom: 3px solid var(--accent); transition: all 0.2s; pointer-events: auto;">
-                        ⚡ Normal Agent
-                    </button>
-                    <button class="task-tab-btn" id="tab-deep-agent" onclick="switchTaskTab('deep'); return false;" style="padding: 1rem 1.5rem; border: none; background: none; color: var(--text-secondary); font-weight: 600; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.2s; pointer-events: auto;">
-                        🧠 Deep Agent (Advanced)
-                    </button>
-                </div>
+                <!-- Task Execution Controls -->
+                <div style="margin-bottom: 1.5rem;">
+                    <h3 style="margin: 0 0 1rem 0; color: var(--text-primary);">Execute Agent Tasks</h3>
 
-                <!-- Normal Agent Tab -->
-                <div class="task-mode-panel" id="panel-normal-agent" style="display: block;">
                     <div class="task-control-bar">
                         <div class="task-agent-group">
-                            <label class="task-label">Agent</label>
+                            <label class="task-label">Select Agent</label>
                             <select id="task-agent-select" class="task-select">
-                                <option value="">— Select Agent —</option>
+                                <option value="">— Choose an Agent —</option>
                             </select>
                         </div>
 
@@ -482,49 +466,13 @@
                                 <div class="task-iter-marks"><span>3</span><span>20</span></div>
                             </div>
                             <button class="btn btn-primary task-run-btn" onclick="startTask()">
-                                ⚡ Run Autonomous Task
+                                ⚡ Run Task
                             </button>
                         </div>
                     </div>
                     <div style="padding: 1rem; background: rgba(59, 130, 246, 0.1); border-left: 3px solid #3b82f6; border-radius: 4px; margin-top: 1rem;">
                         <div style="font-size: 0.85rem; color: var(--text-secondary);">
-                            <strong>Normal Agent Mode:</strong> Uses ADgents ReAct loop for reliable, straightforward task execution.
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Deep Agent Tab -->
-                <div class="task-mode-panel" id="panel-deep-agent" style="display: none;">
-                    <div class="task-control-bar">
-                        <div class="task-agent-group">
-                            <label class="task-label">Select Deep Agent</label>
-                            <select id="task-deep-agent-select" class="task-select">
-                                <option value="">— Select Deep Agent (🧠) —</option>
-                            </select>
-                        </div>
-
-                        <div class="task-input-group">
-                            <label class="task-label">Task Description</label>
-                            <textarea id="task-deep-description" class="task-textarea"
-                                placeholder="Describe what you want — e.g. Research Python async/await, write a comprehensive tutorial with examples"
-                                rows="3"></textarea>
-                        </div>
-
-                        <div class="task-options-group">
-                            <div class="task-iter-row">
-                                <label class="task-label">Max Planning Steps: <strong id="max-deep-steps-val">10</strong></label>
-                                <input type="range" id="task-max-deep-steps" min="3" max="20" value="10"
-                                    oninput="document.getElementById('max-deep-steps-val').textContent=this.value" />
-                                <div class="task-iter-marks"><span>3</span><span>20</span></div>
-                            </div>
-                            <button class="btn btn-primary task-run-btn" onclick="startDeepTask()" style="background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);">
-                                🧠 Run Deep Agent Task
-                            </button>
-                        </div>
-                    </div>
-                    <div style="padding: 1rem; background: rgba(139, 92, 246, 0.1); border-left: 3px solid #8b5cf6; border-radius: 4px; margin-top: 1rem;">
-                        <div style="font-size: 0.85rem; color: var(--text-secondary);">
-                            <strong>🧠 Deep Agent Mode:</strong> Uses Deep Agents SDK for advanced planning, file management, and multi-step reasoning.
+                            <strong>Autonomous Task Execution:</strong> The selected agent will execute the task using ReAct reasoning with autonomous decision-making.
                         </div>
                     </div>
                 </div>
@@ -545,7 +493,7 @@
                         <div class="task-empty-state">
                             <div class="task-empty-icon">⚡</div>
                             <div class="task-empty-title">Ready for Tasks</div>
-                            <div class="task-empty-desc">Choose a mode above (Normal or Deep Agent), select an agent, describe the task, then hit Run.<br>You'll see the agent's thoughts and actions here in real-time.</div>
+                            <div class="task-empty-desc">Choose an agent, describe the task, then hit Run.<br>You'll see the agent's thoughts and actions here in real-time.</div>
                         </div>
                     </div>
                 </div>
@@ -872,22 +820,37 @@
                     <!-- LLM Configuration -->
                     <div class="card">
                         <div class="card-header">
-                            <h3>🤖 LLM Provider</h3>
+                            <h3>🤖 LLM Configuration</h3>
                         </div>
                         
-                        <!-- Environment Status -->
+                        <!-- Current Configuration Display -->
+                        <div style="background: linear-gradient(135deg, rgba(124, 58, 237, 0.1), rgba(37, 99, 235, 0.1)); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1.5rem;">
+                            <div style="font-weight: 600; margin-bottom: 0.75rem;">📊 Current Configuration</div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                <div>
+                                    <div style="color: var(--text-secondary); font-size: 0.85rem;">Provider</div>
+                                    <div id="current-provider-display" style="font-weight: 600; color: var(--accent);">🔴 OpenAI</div>
+                                </div>
+                                <div>
+                                    <div style="color: var(--text-secondary); font-size: 0.85rem;">Model</div>
+                                    <div id="current-model-display" style="font-weight: 600;">gpt-4o-mini</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Configured Providers Status -->
                         <div style="background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1.5rem;">
-                            <div style="font-weight: 600; margin-bottom: 0.75rem;">📋 Configured Providers</div>
-                            <div id="llm-env-status" style="display: grid; gap: 0.5rem;">
+                            <div style="font-weight: 600; margin-bottom: 0.75rem;">✅ Configured Providers</div>
+                            <div id="llm-env-status" style="display: grid; gap: 0.5rem; font-size: 0.9rem;">
                                 <div style="color: var(--text-secondary);">Loading...</div>
                             </div>
                         </div>
 
                         <!-- Provider & Model Selection -->
                         <div class="form-group">
-                            <label>Select Provider</label>
+                            <label>LLM Provider</label>
                             <select id="llm-provider" onchange="updateProviderSelection()" class="form-input">
-                                <option value="">-- Choose --</option>
+                                <option value="">-- Select Provider --</option>
                                 <option value="openai">🔴 OpenAI</option>
                                 <option value="gemini">🔵 Google Gemini</option>
                                 <option value="claude">✨ Anthropic Claude</option>
@@ -895,18 +858,23 @@
                         </div>
 
                         <div class="form-group">
-                            <label>Select Model</label>
-                            <select id="llm-model" class="form-input" onchange="onModelSelected()">
-                                <option value="">⏳ Loading...</option>
-                            </select>
-                            <small id="model-hint" style="display:block; color:var(--text-secondary); margin-top:0.5rem;">Available models from configured providers</small>
+                            <label>API Key <span style="color: var(--text-secondary); font-size: 0.85rem;">(optional - leave blank to use .env)</span></label>
+                            <input type="password" id="llm-api-key" placeholder="Leave blank to use existing .env key" class="form-input" />
+                            <small style="display:block; color:var(--text-secondary); margin-top:0.5rem;">🔒 Only provide if you want to update the API key. Otherwise, the .env file key will be used.</small>
                         </div>
 
-                        <div style="display:flex; gap:0.75rem;">
-                            <button class="btn btn-primary" onclick="saveLLMConfig()">💾 Save</button>
-                            <button class="btn btn-ghost" onclick="testLLMConnection()">🧪 Test</button>
+                        <div class="form-group">
+                            <label>Model</label>
+                            <input type="text" id="llm-model" placeholder="e.g., gpt-4o, gpt-4o-mini, gemini-2.5-flash, claude-3-5-sonnet-20241022" class="form-input" />
+                            <small id="model-hint" style="display:block; color:var(--text-secondary); margin-top:0.5rem;">Enter any model name - not limited to predefined models</small>
                         </div>
-                        <div id="llm-config-status" style="margin-top:0.75rem"></div>
+
+                        <div style="display:flex; gap:0.75rem; flex-wrap: wrap;">
+                            <button class="btn btn-primary" onclick="saveLLMConfig()">💾 Save Configuration</button>
+                            <button class="btn btn-ghost" onclick="testLLMConnection()">🧪 Test Connection</button>
+                            <button class="btn btn-ghost" onclick="loadCurrentLLMConfig()">🔄 Reload</button>
+                        </div>
+                        <div id="llm-config-status" style="margin-top:1rem; display:none;"></div>
                     </div>
 
                     <!-- Personal Settings -->

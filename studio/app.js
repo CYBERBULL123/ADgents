@@ -65,14 +65,9 @@ function navigate(page) {
         document.getElementById('memory-type').value = localStorage.getItem('memory_type') || 'multi_tier';
         document.getElementById('auto-save').checked = localStorage.getItem('auto_save') === 'true';
 
-        // Restore saved provider dropdown (model will be restored after models load)
-        const savedProvider = localStorage.getItem('llm_provider');
-        if (savedProvider) {
-            document.getElementById('llm-provider').value = savedProvider;
-        }
-
-        // Load providers info banner + all models (restore selection happens after load)
-        loadConfiguredProviders();
+        // Load current LLM configuration and environment status
+        loadCurrentLLMConfig();
+        loadEnvironmentStatus();
     }
     if (page === 'builder') initBuilder();
     if (page === 'dashboard') updateDashboard();
@@ -394,7 +389,6 @@ function renderAgentsGrid(filter = '') {
         const traits = (a.persona.personality_traits || []).slice(0, 3);
         const skills = (a.available_skills || []).length;
         const mem = a.memory_stats?.episodic_memories || 0;
-        const isDeepAgent = a.is_deep_agent || false;
         return `
       <div class="agent-card" onclick="openAgentChat('${a.persona.id}')">
         <div class="agent-card-header">
@@ -404,7 +398,6 @@ function renderAgentsGrid(filter = '') {
             <div class="agent-role">${a.persona.role}</div>
           </div>
           <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
-            ${isDeepAgent ? '<span class="badge" style="background: rgba(139, 92, 246, 0.2); color: #8b5cf6; font-size: 0.7rem;">🧠 Deep</span>' : ''}
             <span class="badge badge-${a.status === 'idle' ? 'green' : 'blue'}">${a.status}</span>
           </div>
         </div>
@@ -428,7 +421,6 @@ function renderAgentsGrid(filter = '') {
         <div class="agent-actions" onclick="event.stopPropagation()">
           <button class="btn btn-ghost btn-xs" onclick="openAgentChat('${a.persona.id}')">💬 Chat</button>
           <button class="btn btn-ghost btn-xs" onclick="navigate('tasks')">⚡ Task</button>
-          <button class="btn btn-ghost btn-xs" onclick="toggleAgentDeepMode('${a.persona.id}', ${!isDeepAgent})" title="${isDeepAgent ? 'Disable' : 'Enable'} Deep Agent">${isDeepAgent ? '🧠 Deep' : '🔧 Regular'}</button>
           <button class="btn btn-ghost btn-xs" onclick="editAgent('${a.persona.id}')">✏️ Edit</button>
           <button class="btn btn-danger btn-xs" onclick="deleteAgent('${a.persona.id}')">🗑️</button>
         </div>
@@ -448,23 +440,6 @@ function deleteAgent(id) {
             toast('Agent deleted', 'info');
         } catch (e) { toast(e.message, 'error'); }
     });
-}
-
-async function toggleAgentDeepMode(agentId, enable) {
-    try {
-        const result = await api(`/agents/${agentId}/deep-agent?enable=${enable}`, 'PUT');
-        if (result.success) {
-            // Update the agent in state
-            state.agents[agentId] = result.agent;
-            renderAgentsGrid();
-            const mode = enable ? 'enabled 🧠' : 'disabled';
-            toast(`Deep Agent ${mode}`, 'success');
-        } else {
-            toast(result.error || 'Failed to toggle deep agent mode', 'error');
-        }
-    } catch (e) {
-        toast('Error: ' + e.message, 'error');
-    }
 }
 
 function openAgentChat(id) {
@@ -622,15 +597,9 @@ function resetBuilder() {
     document.getElementById('autonomy-val').textContent = 3;
     document.getElementById('build-creativity').value = 70;
     document.getElementById('creativity-val').textContent = 70;
-    document.getElementById('build-deep-agent').checked = false;
     state.selectedBuilderSkills = new Set();
     document.querySelectorAll('.skill-check-item').forEach(el => el.classList.remove('selected'));
     updatePreview();
-}
-
-function toggleDeepAgent() {
-    const checkbox = document.getElementById('build-deep-agent');
-    checkbox.checked = !checkbox.checked;
 }
 
 async function createAgent() {
@@ -639,8 +608,6 @@ async function createAgent() {
 
     if (!name) { toast('Please enter an agent name', 'error'); return; }
     if (!role) { toast('Please enter a role/title', 'error'); return; }
-
-    const isDeepAgent = document.getElementById('build-deep-agent')?.checked || false;
 
     const persona = {
         name,
@@ -668,9 +635,9 @@ async function createAgent() {
             }
             toast(`✨ ${name} updated successfully!`, 'success');
         } else {
-            const result = await api('/agents', 'POST', { persona, is_deep_agent: isDeepAgent });
+            const result = await api('/agents', 'POST', { persona });
             state.agents[result.agent.id] = result.agent;
-            toast(`✨ ${name} is ready!${isDeepAgent ? ' 🧠 (Deep Agent powered by LangChain)' : ''}`, 'success');
+            toast(`✨ ${name} is ready!`, 'success');
         }
         
         updateAgentCount();
@@ -867,92 +834,25 @@ async function resetChatSession() {
 }
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
-// ─── Task Execution (Normal & Deep Agent) ─────────────────────────────────
+// ─── Task Execution ─────────────────────────────────────────────────────────
 
 function initTaskTabListeners() {
-    console.log('[DEBUG] Initializing task tab listeners...');
-    const normalTab = document.getElementById('tab-normal-agent');
-    const deepTab = document.getElementById('tab-deep-agent');
-    
-    if (normalTab) {
-        normalTab.addEventListener('click', (e) => {
-            console.log('[DEBUG] Normal tab clicked');
-            e.preventDefault();
-            switchTaskTab('normal');
-        });
-    } else {
-        console.error('[ERROR] Normal tab button not found');
-    }
-    
-    if (deepTab) {
-        deepTab.addEventListener('click', (e) => {
-            console.log('[DEBUG] Deep tab clicked');
-            e.preventDefault();
-            switchTaskTab('deep');
-        });
-    } else {
-        console.error('[ERROR] Deep tab button not found');
-    }
+    // Task tab listeners no longer needed - only normal agent mode
+    console.log('[DEBUG] Task listeners initialized');
 }
 
 function switchTaskTab(mode) {
-    console.log('[DEBUG] switchTaskTab called with mode:', mode);
-    
-    const normalPanel = document.getElementById('panel-normal-agent');
-    const deepPanel = document.getElementById('panel-deep-agent');
-    const normalTab = document.getElementById('tab-normal-agent');
-    const deepTab = document.getElementById('tab-deep-agent');
-    
-    if (!normalPanel || !deepPanel || !normalTab || !deepTab) {
-        console.error('[ERROR] One or more elements not found');
-        console.error('normalPanel:', normalPanel, 'deepPanel:', deepPanel, 'normalTab:', normalTab, 'deepTab:', deepTab);
-        return;
-    }
-    
-    if (mode === 'normal') {
-        normalPanel.style.display = 'block';
-        deepPanel.style.display = 'none';
-        normalTab.classList.add('active');
-        normalTab.style.borderBottomColor = 'var(--accent)';
-        normalTab.style.color = 'var(--text-primary)';
-        deepTab.classList.remove('active');
-        deepTab.style.borderBottomColor = 'transparent';
-        deepTab.style.color = 'var(--text-secondary)';
-        console.log('[DEBUG] Switched to Normal Agent tab');
-    } else if (mode === 'deep') {
-        normalPanel.style.display = 'none';
-        deepPanel.style.display = 'block';
-        normalTab.classList.remove('active');
-        normalTab.style.borderBottomColor = 'transparent';
-        normalTab.style.color = 'var(--text-secondary)';
-        deepTab.classList.add('active');
-        deepTab.style.borderBottomColor = '#8b5cf6';
-        deepTab.style.color = 'var(--text-primary)';
-        console.log('[DEBUG] Switched to Deep Agent tab');
-    }
-    clearTaskFeed();
+    // Tab switching no longer needed - only single mode
 }
 
 function populateTaskAgentSelect() {
     const selNormal = document.getElementById('task-agent-select');
-    const selDeep = document.getElementById('task-deep-agent-select');
     
-    // For normal agents - show all agents
+    // Show all agents
     if (selNormal) {
         const agents = Object.values(state.agents);
         selNormal.innerHTML = '<option value="">— Select Agent —</option>' +
             agents.map(a => `<option value="${a.persona.id}">${a.persona.avatar} ${a.persona.name} (${a.persona.role})</option>`).join('');
-    }
-    
-    // For deep agents - only show agents with is_deep_agent=true
-    if (selDeep) {
-        const deepAgents = Object.values(state.agents).filter(a => a.is_deep_agent === true);
-        if (deepAgents.length === 0) {
-            selDeep.innerHTML = '<option value="">— No Deep Agents Available —</option><option value="">Create one in Builder with "Enable Deep Agent"</option>';
-        } else {
-            selDeep.innerHTML = '<option value="">— Select Deep Agent —</option>' +
-                deepAgents.map(a => `<option value="${a.persona.id}">🧠 ${a.persona.avatar} ${a.persona.name}</option>`).join('');
-        }
     }
 }
 
@@ -980,43 +880,8 @@ async function startTask() {
     try {
         const res = await api('/tasks', 'POST', { agent_id: agentId, task: taskDesc, max_iterations: maxIter });
         state.pendingTaskId = res.task_id;
-        toast(`⚡ Normal Agent Task started for ${state.agents[agentId]?.persona?.name}`, 'success');
+        toast(`⚡ Task started for ${state.agents[agentId]?.persona?.name}`, 'success');
         setTimeout(() => setTaskRunning(false, agentForTask?.persona?.name), 30000);
-    } catch (e) { toast(e.message, 'error'); }
-}
-
-async function startDeepTask() {
-    const agentId = document.getElementById('task-deep-agent-select')?.value;
-    const taskDesc = document.getElementById('task-deep-description')?.value?.trim();
-    const maxSteps = parseInt(document.getElementById('task-max-deep-steps')?.value || 10);
-
-    if (!agentId) { toast('Select a Deep Agent', 'error'); return; }
-    if (!taskDesc) { toast('Enter a task description', 'error'); return; }
-
-    const agentForTask = state.agents[agentId];
-    setTaskRunning(true, agentForTask?.persona?.name);
-
-    // Clear steps
-    const stepsEl = document.getElementById('task-steps');
-    stepsEl.innerHTML = '<div class="task-step thought"><div class="step-header"><span class="step-type">🚀</span><span class="step-type thought">🧠 Starting Deep Agent Task...</span></div><div class="step-content">' + escapeHtml(taskDesc) + '</div></div>';
-
-    // Connect WebSocket for real-time steps
-    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-        connectWebSocket(agentId);
-        await new Promise(r => setTimeout(r, 300)); // Let WS connect
-    }
-
-    try {
-        // For deep agents, send a special flag to enable deep agent mode
-        const res = await api('/tasks', 'POST', { 
-            agent_id: agentId, 
-            task: taskDesc, 
-            max_iterations: maxSteps,
-            use_deep_agent: true  // Flag to use deep agent execution
-        });
-        state.pendingTaskId = res.task_id;
-        toast(`🧠 Deep Agent Task started for ${state.agents[agentId]?.persona?.name}`, 'success');
-        setTimeout(() => setTaskRunning(false, agentForTask?.persona?.name), 60000);
     } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -1376,146 +1241,6 @@ function renderSkillsPage() {
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
-async function loadAllAvailableModels() {
-    // Load all models from all providers and populate dropdown
-    try {
-        console.log('🔄 Loading all available models from all providers...');
-        const modelHint = document.getElementById('model-hint');
-        const modelSelect = document.getElementById('llm-model');
-        
-        if (modelHint) modelHint.textContent = '⏳ Fetching models from all providers...';
-        if (modelSelect) modelSelect.innerHTML = '<option value="">⏳ Loading models...</option>';
-        
-        console.log('📡 API Call: GET /llm/models');
-        const response = await api('/llm/models', 'GET', null, 30000);
-        
-        console.log('✅ API Response:', response);
-        
-        if (response && response.success && response.providers) {
-            console.log('📦 Providers received:', Object.keys(response.providers));
-            
-            const providers = response.providers;
-            const options = [];
-            let modelCount = 0;
-            let configuredCount = 0;
-            
-            // Organize by provider - show ALL providers, not just configured ones
-            for (const [providerKey, providerData] of Object.entries(providers)) {
-                console.log(`🔍 Checking provider: ${providerKey}`, providerData);
-                
-                if (providerData.models && providerData.models.length > 0) {
-                    const icon = providerData.icon || '⚙️';
-                    const providerLabel = providerData.provider || providerKey;
-                    const configStatus = providerData.configured ? '✅' : '⚠️';
-                    const configText = providerData.configured ? '' : ' (Not Configured)';
-                    
-                    options.push(`<optgroup label="${configStatus} ${icon} ${providerLabel}${configText}">`);
-                    
-                    providerData.models.forEach(model => {
-                        // Format: "model|provider-key" for auto-selection
-                        const displayName = model.length > 50 ? model.substring(0, 47) + '...' : model;
-                        options.push(`<option value="${model}|${providerKey}">${displayName}</option>`);
-                        modelCount++;
-                        if (providerData.configured) configuredCount++;
-                    });
-                    
-                    options.push('</optgroup>');
-                }
-            }
-            
-            if (modelCount > 0) {
-                modelSelect.innerHTML = `<option value="">-- Select a model --</option>` + options.join('');
-                if (configuredCount > 0) {
-                    modelHint.textContent = `✅ ${modelCount} models available (${configuredCount} from configured providers)`;
-                } else {
-                    modelHint.textContent = `⚠️ ${modelCount} models available. Configure API keys in .env to enable providers.`;
-                }
-                console.log(`✨ SUCCESS: Loaded ${modelCount} models`);
-
-                // Restore saved model selection now that options are populated
-                const savedProvider = localStorage.getItem('llm_provider');
-                const savedModel = localStorage.getItem('llm_model');
-                if (savedProvider && savedModel) {
-                    for (let option of modelSelect.options) {
-                        if (option.value && option.value.startsWith(savedModel + '|' + savedProvider)) {
-                            modelSelect.value = option.value;
-                            break;
-                        }
-                    }
-                    // If exact provider match not found, try any provider
-                    if (!modelSelect.value || modelSelect.value === '') {
-                        for (let option of modelSelect.options) {
-                            if (option.value && option.value.startsWith(savedModel + '|')) {
-                                modelSelect.value = option.value;
-                                break;
-                            }
-                        }
-                    }
-                    if (modelSelect.value) {
-                        const providerNames = {
-                            'openai': '🔴 OpenAI', 'gemini': '🔵 Google Gemini',
-                            'claude': '✨ Anthropic Claude', 'ollama': '🦙 Ollama (Local)'
-                        };
-                        updateCurrentSelectionDisplay(savedProvider, savedModel, providerNames[savedProvider] || savedProvider);
-                    }
-                }
-            } else {
-                modelSelect.innerHTML = '<option value="">❌ No models available</option>';
-                modelHint.textContent = '❌ No models found. This should not happen!';
-                console.warn('⚠️ No models found in response');
-            }
-        } else {
-            console.error('❌ Invalid response format:', response);
-            modelSelect.innerHTML = '<option value="">❌ Error loading models</option>';
-            modelHint.textContent = `❌ Error: ${response?.error || 'Invalid response'}`;
-        }
-    } catch (e) {
-        console.error('❌ Error loading all models:', e);
-        const modelSelect = document.getElementById('llm-model');
-        const modelHint = document.getElementById('model-hint');
-        if (modelSelect) modelSelect.innerHTML = '<option value="">❌ Error loading models</option>';
-        if (modelHint) modelHint.textContent = `❌ Error: ${e.message}`;
-    }
-}
-
-function onModelSelected() {
-    // Handle model selection - auto-set provider based on selected model
-    const modelSelect = document.getElementById('llm-model');
-    const providerSelect = document.getElementById('llm-provider');
-    const selectedValue = modelSelect?.value;
-    
-    if (!selectedValue || selectedValue === '') {
-        return;
-    }
-    
-    // Extract provider info from the option value
-    // Format: "model-name|provider-key"
-    const parts = selectedValue.split('|');
-    if (parts.length === 2) {
-        const [modelName, providerKey] = parts;
-        console.log(`Model selected: ${modelName} from provider: ${providerKey}`);
-        
-        // Auto-set the provider
-        if (providerSelect) {
-            providerSelect.value = providerKey;
-            console.log(`Auto-selected provider: ${providerKey}`);
-        }
-        
-        // Update the model input to show just the model name
-        modelSelect.value = selectedValue;
-        
-        // Update current selection display
-        updateCurrentSelectionDisplay(providerKey, modelName);
-    }
-}
-
-function updateCurrentSelectionDisplay(provider, model, providerDisplayName) {
-    const banner = document.getElementById('llm-active-banner');
-    if (!banner) return;
-    const label = providerDisplayName || {'openai':'🔴 OpenAI','gemini':'🔵 Gemini','claude':'✨ Claude','ollama':'🦙 Ollama'}[provider] || provider;
-    banner.textContent = `✅ Active: ${label} — ${model}`;
-    banner.style.display = 'block';
-}
 
 async function loadEnvironmentStatus() {
     /**Load and display which LLM providers are configured in environment variables.*/
@@ -1550,12 +1275,7 @@ async function loadEnvironmentStatus() {
     }
 }
 
-async function loadConfiguredProviders() {
-    // Load environment status first
-    await loadEnvironmentStatus();
-    // Then load all available models
-    await loadAllAvailableModels();
-}
+
 
 function updateDBConnectionFields() {
     const dbType = document.getElementById('db-type')?.value || 'sqlite';
@@ -1597,72 +1317,89 @@ function updateDBConnectionFields() {
 }
 
 async function updateProviderSelection() {
-    // When user manually changes provider, filter models to that provider
+    // When user manually changes provider, just update the hint
     const provider = document.getElementById('llm-provider')?.value?.trim();
-    const modelSelect = document.getElementById('llm-model');
     const modelHint = document.getElementById('model-hint');
     
     console.log('Provider changed to:', provider);
     
     if (!provider || provider === '') {
-        // Show all models again
-        await loadAllAvailableModels();
+        if (modelHint) modelHint.textContent = 'Select a provider first...';
         return;
     }
     
     try {
-        if (modelHint) modelHint.textContent = `Loading ${provider} models...`;
-        if (modelSelect) modelSelect.innerHTML = '<option value="">Loading...</option>';
-        
         const response = await api(`/llm/models/${provider}`);
         
-        if (response.success && response.models) {
-            console.log(`Loaded ${response.models.length} ${provider} models`);
-            const options = [`<option value="">-- Select a model from ${provider} --</option>`];
-            
-            response.models.forEach(model => {
-                const displayName = model.length > 50 ? model.substring(0, 47) + '...' : model;
-                options.push(`<option value="${model}|${provider}">${displayName}</option>`);
-            });
-            
-            if (modelSelect) modelSelect.innerHTML = options.join('');
-            if (modelHint) modelHint.textContent = `${response.models.length} ${response.provider} models available`;
+        if (response.success) {
+            const modelField = document.getElementById('llm-model');
+            if (modelField && modelField.placeholder.includes(response.default_model)) {
+                // Placeholder already has this model, no need to update
+            }
+            if (modelHint) {
+                modelHint.textContent = `Enter any model name. (Suggested: ${response.default_model})`;
+            }
         } else {
-            if (modelSelect) modelSelect.innerHTML = '<option value="">Failed to load models</option>';
-            if (modelHint) modelHint.textContent = response.error || 'Failed to load models';
+            if (modelHint) modelHint.textContent = response.error || 'Failed to load provider info';
         }
     } catch (e) {
-        console.error('Error updating models:', e);
-        if (modelSelect) modelSelect.innerHTML = '<option value="">Error loading models</option>';
+        console.error('Error updating provider:', e);
         if (modelHint) modelHint.textContent = `Error: ${e.message}`;
     }
 }
 
+async function loadCurrentLLMConfig() {
+    try {
+        const response = await api('/llm/current-config');
+        if (response.success) {
+            // Update the display
+            const providerDisplay = document.getElementById('current-provider-display');
+            const modelDisplay = document.getElementById('current-model-display');
+            
+            if (providerDisplay) {
+                providerDisplay.textContent = `${response.icon} ${response.provider_display}`;
+            }
+            if (modelDisplay) {
+                modelDisplay.textContent = response.model;
+            }
+            
+            // Set the provider dropdown
+            document.getElementById('llm-provider').value = response.provider;
+            
+            // Set the model text field directly
+            document.getElementById('llm-model').value = response.model;
+            
+            // Update hint
+            await updateProviderSelection();
+            
+            toast('Configuration loaded', 'success');
+        }
+    } catch (e) {
+        console.error('Error loading current config:', e);
+        toast('Failed to load configuration', 'error');
+    }
+}
+
+
+
 async function saveLLMConfig() {
     const provider = document.getElementById('llm-provider')?.value?.trim();
     const api_key = document.getElementById('llm-api-key')?.value?.trim();
-    const modelSelect = document.getElementById('llm-model');
-    let model = modelSelect?.value?.trim();
-    
-    // Extract model name if it includes provider info (format: "model|provider")
-    if (model && model.includes('|')) {
-        model = model.split('|')[0];
-    }
+    const model = document.getElementById('llm-model')?.value?.trim();
 
     if (!provider || provider === '') {
         toast('Select a provider', 'error');
         return;
     }
 
-    // API key optional — .env is used if blank
-
     if (!model || model === '') {
-        toast('Select a model', 'error');
+        toast('Enter a model name', 'error');
         return;
     }
 
     const statusEl = document.getElementById('llm-config-status');
-    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving configuration...</span>';
 
     try {
         // Only send API key if provided (non-empty)
@@ -1671,25 +1408,22 @@ async function saveLLMConfig() {
             payload.api_key = api_key;
         }
         
-        await api('/llm/configure', 'POST', payload);
+        const response = await api('/llm/configure', 'POST', payload);
         
-        // Save to localStorage (only the model selection, not the key)
-        localStorage.setItem('llm_provider', provider);
-        localStorage.setItem('llm_model', model);
-        
-        // Update current selection display
-        const providerNames = {
-            'openai': '🔴 OpenAI',
-            'gemini': '🔵 Google Gemini',
-            'claude': '✨ Anthropic Claude',
-            'ollama': '🦙 Ollama (Local)'
-        };
-        updateCurrentSelectionDisplay(provider, model, providerNames[provider] || provider);
-        
-        statusEl.innerHTML = '<span class="badge badge-green">✅ Saved</span>';
-        toast(`${provider} → ${model} saved!`, 'success');
+        if (response.success) {
+            // Reload current config to update display
+            await loadCurrentLLMConfig();
+            
+            statusEl.innerHTML = '<span class="badge badge-green">✅ Configuration saved successfully!</span>';
+            toast(`✅ ${provider} → ${model} configured and saved!`, 'success');
+            
+            // Clear API key field for security
+            document.getElementById('llm-api-key').value = '';
+        } else {
+            throw new Error(response.error || 'Unknown error');
+        }
     } catch (e) {
-        statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
+        statusEl.innerHTML = `<span class="badge badge-red">❌ Failed: ${e.message}</span>`;
         toast(e.message, 'error');
     }
 }
@@ -1702,15 +1436,16 @@ async function testLLMConnection() {
     }
 
     const statusEl = document.getElementById('llm-config-status');
-    statusEl.innerHTML = '<span class="badge badge-blue">🧪 Testing connection...</span>';
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<span class="badge badge-blue">🧪 Testing connection to ' + provider + '...</span>';
 
     try {
         const result = await api('/llm/test', 'POST', { provider });
         if (result.success) {
-            statusEl.innerHTML = `<span class="badge badge-green">✅ Connection successful! Model: ${result.model || result.provider}</span>`;
-            toast('Connection test passed!', 'success');
+            statusEl.innerHTML = `<span class="badge badge-green">✅ ${result.message || 'Connection successful!'}</span><br><small style="color: var(--text-secondary); margin-top: 0.5rem; display: block;">Sample response: "${result.response_sample || ''}"</small>`;
+            toast('Connection test passed! ✅', 'success');
         } else {
-            statusEl.innerHTML = `<span class="badge badge-red">❌ ${result.error || 'Test failed'}</span>`;
+            statusEl.innerHTML = `<span class="badge badge-red">❌ Connection failed</span><br><small style="color: #ef4444; margin-top: 0.5rem; display: block;">${result.error || 'Unknown error'}</small>`;
             toast(result.error || 'Connection test failed', 'error');
         }
     } catch (e) {

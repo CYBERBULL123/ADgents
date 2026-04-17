@@ -74,7 +74,6 @@ except ImportError:
 class CreateAgentRequest(BaseModel):
     template: Optional[str] = None
     persona: Optional[Dict] = None
-    is_deep_agent: Optional[bool] = False  # Enable LangChain advanced features
 
 class ChatRequest(BaseModel):
     message: str
@@ -84,7 +83,6 @@ class TaskRequest(BaseModel):
     task: str
     agent_id: str
     max_iterations: Optional[int] = 10
-    use_deep_agent: Optional[bool] = False  # Use Deep Agents SDK if True
 
 class LearnRequest(BaseModel):
     agent_id: str
@@ -259,333 +257,7 @@ async def _agent_auto_reply(
         logger.error(f"[A2A] Auto-reply error: {e}")
 
 
-# ─── Deep Agent Execution ─────────────────────────────────────────────────────
-def _run_deep_agent(agent: Agent, task: str, max_iterations: int, on_thought_callback: callable) -> AgentTask:
-    """
-    Execute an agent using the Deep Agents SDK (specialized LangChain-based agent framework).
-    Deep Agents provide: planning, file system management, subagents, long-term memory.
-    
-    Args:
-        agent: ADgents Agent instance with is_deep_agent=True
-        task: The task to execute
-        max_iterations: Max iterations for the agent
-        on_thought_callback: Callback function to report thought steps
-    
-    Returns:
-        AgentTask with results
-    """
-    started_at = datetime.utcnow().isoformat()
-    
-    try:
-        # Try to import deepagents
-        try:
-            from deepagents import create_deep_agent
-        except ImportError:
-            # Fallback: if deepagents not installed, use standard agent.run()
-            logger.warning("Deep Agents SDK not installed. Install with: pip install deepagents")
-            logger.info(f"Falling back to standard ReAct loop for '{agent.persona.name}'")
-            on_thought_callback(ThoughtStep(
-                step_type="thought",
-                content="⚠️ Deep Agents SDK not installed. Using standard ReAct. Run: pip install deepagents",
-                timestamp=datetime.utcnow().isoformat()
-            ))
-            # Fallback to regular agent
-            return agent.run(task, max_iterations)
-        
-        logger.info(f"🧠 Running Deep Agent '{agent.persona.name}' with task: {task[:100]}...")
-        
-        # Emit initial thought
-        on_thought_callback(ThoughtStep(
-            step_type="thought",
-            content="🧠 Deep Agent Mode - Planning, file management, and advanced reasoning enabled",
-            timestamp=datetime.utcnow().isoformat()
-        ))
-        
-        # Get LLM model for Deep Agents - try to create a LangChain model
-        langchain_model = None
-        status = LLM_ROUTER.status()
-        
-        try:
-            # Try to use configured providers
-            if status.get("anthropic", {}).get("available"):
-                from langchain_anthropic import ChatAnthropic
-                api_key = os.getenv("ANTHROPIC_API_KEY")
-                if api_key:
-                    langchain_model = ChatAnthropic(api_key=api_key, model="claude-3-5-sonnet-20241022")
-                    logger.info("Using Anthropic/Claude for Deep Agent")
-            elif status.get("openai", {}).get("available"):
-                from langchain_openai import ChatOpenAI
-                api_key = os.getenv("OPENAI_API_KEY")
-                if api_key:
-                    langchain_model = ChatOpenAI(api_key=api_key, model="gpt-4o-mini")
-                    logger.info("Using OpenAI/GPT-4o for Deep Agent")
-            elif status.get("gemini", {}).get("available"):
-                from langchain_google_genai import ChatGoogleGenerativeAI
-                api_key = os.getenv("GEMINI_API_KEY")
-                if api_key:
-                    langchain_model = ChatGoogleGenerativeAI(api_key=api_key, model="gemini-1.5-flash")
-                    logger.info("Using Gemini for Deep Agent")
-        except Exception as e:
-            logger.warning(f"Failed to initialize LangChain model: {e}")
-            langchain_model = None
-        
-        # If no model available, fallback to standard agent
-        if not langchain_model:
-            logger.warning("No LLM configured for Deep Agents. Falling back to standard ReAct")
-            on_thought_callback(ThoughtStep(
-                step_type="thought",
-                content="⚠️ No LLM API key configured. Using standard ReAct. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY",
-                timestamp=datetime.utcnow().isoformat()
-            ))
-            return agent.run(task, max_iterations)
-        
-        # Convert agent skills to deepagents-compatible LangChain tools
-        from langchain_core.tools import StructuredTool
-        import inspect
-        
-        tools = []
-        # Only use skills assigned to this agent
-        all_skills = agent.skill_registry.list()
-        assigned_skill_names = set(agent.persona.skills or [s.name for s in all_skills])
-        
-        for skill in all_skills:
-            # Skip skills not assigned to this agent
-            if skill.name not in assigned_skill_names:
-                logger.info(f"[Deep Agent Tool] Skipping unassigned skill: {skill.name}")
-                continue
-                
-            try:
-                skill_name = skill.name
-                skill_desc = skill.description or "Execute skill"
-                skill_handler = skill.handler
-                skill_params = skill.parameters or {}
-                
-                logger.info(f"[Deep Agent Tool] Converting skill: {skill_name} with params: {list(skill_params.get('properties', {}).keys())}")
-                
-                # Get the actual function signature to determine parameters
-                sig = inspect.signature(skill_handler)
-                param_names = list(sig.parameters.keys())
-                
-                logger.info(f"[Deep Agent Tool] Handler signature for {skill_name}: {param_names}")
-                
-                # Create tool wrapper that properly maps parameters
-                def make_skill_tool(handler, name, desc, params_info, sig):
-                    # Build a dynamic function with proper type hints
-                    param_names = list(sig.parameters.keys())
-                    
-                    if not param_names:
-                        # No parameters - shouldn't happen but handle it
-                        def no_param_tool() -> str:
-                            try:
-                                result = handler()
-                                logger.info(f"[Skill {name}] Success")
-                                return str(result)
-                            except Exception as e:
-                                logger.error(f"[Skill {name}] Error: {e}", exc_info=True)
-                                return f"Error: {str(e)}"
-                        return no_param_tool, name, desc
-                    
-                    elif len(param_names) == 1:
-                        # Single parameter - use first param name
-                        param_name = param_names[0]
-                        param_type = sig.parameters[param_name].annotation or str
-                        
-                        def single_param_tool(**kwargs) -> str:
-                            try:
-                                # Extract the value from kwargs using the actual parameter name
-                                value = kwargs.get(param_name, kwargs.get('query', kwargs.get('text', '')))
-                                result = handler(**{param_name: value})
-                                logger.info(f"[Skill {name}] Success")
-                                return str(result)
-                            except Exception as e:
-                                logger.error(f"[Skill {name}] Error: {e}", exc_info=True)
-                                return f"Error: {str(e)}"
-                        
-                        # Set proper annotation
-                        single_param_tool.__annotations__ = {param_name: param_type, 'return': str}
-                        return single_param_tool, name, desc
-                    
-                    else:
-                        # Multiple parameters - build dynamic function
-                        def multi_param_tool(**kwargs) -> str:
-                            try:
-                                # Build args dict with actual parameter names
-                                args = {}
-                                for pname in param_names:
-                                    if pname in kwargs:
-                                        args[pname] = kwargs[pname]
-                                    elif pname == 'text' and 'query' in kwargs:
-                                        args[pname] = kwargs['query']
-                                    elif pname == 'max_sentences' or pname == 'num_results':
-                                        args[pname] = kwargs.get(pname, 5)  # Default values
-                                
-                                logger.info(f"[Skill {name}] Calling with args: {args}")
-                                result = handler(**args)
-                                logger.info(f"[Skill {name}] Success")
-                                return str(result)
-                            except Exception as e:
-                                logger.error(f"[Skill {name}] Error: {e}", exc_info=True)
-                                return f"Error: {str(e)}"
-                        
-                        # Build annotations
-                        annotations = {}
-                        for pname in param_names:
-                            ptype = sig.parameters[pname].annotation or str
-                            annotations[pname] = ptype
-                        annotations['return'] = str
-                        multi_param_tool.__annotations__ = annotations
-                        return multi_param_tool, name, desc
-                
-                tool_func, tool_name, tool_desc = make_skill_tool(skill_handler, skill_name, skill_desc, skill_params, sig)
-                
-                # Create LangChain StructuredTool
-                tool = StructuredTool.from_function(
-                    func=tool_func,
-                    name=tool_name,
-                    description=tool_desc
-                )
-                tools.append(tool)
-                logger.info(f"[Deep Agent Tool] ✅ Created tool: {tool_name}")
-                
-            except Exception as e:
-                logger.error(f"[Deep Agent Tool] ❌ Failed to convert skill {skill.name}: {e}", exc_info=True)
-        
-        logger.info(f"[Deep Agent] Total tools ready: {len(tools)}")
-        
-        # Create Deep Agent with system prompt from agent persona
-        system_prompt = agent.persona.to_system_prompt()
-        
-        on_thought_callback(ThoughtStep(
-            step_type="thought",
-            content="🔧 Setting up Deep Agent tools and reasoning framework...",
-            timestamp=datetime.utcnow().isoformat()
-        ))
-        
-        deep_agent = create_deep_agent(
-            model=langchain_model,
-            tools=tools,
-            system_prompt=system_prompt,
-        )
-        
-        on_thought_callback(ThoughtStep(
-            step_type="thought",
-            content="💭 Beginning advanced planning and reasoning...",
-            timestamp=datetime.utcnow().isoformat()
-        ))
-        
-        # Run the deep agent
-        logger.info(f"[Deep Agent] Invoking with task: {task[:100]}")
-        result = deep_agent.invoke({
-            "messages": [{"role": "user", "content": task}]
-        })
-        
-        logger.info(f"[Deep Agent] Result type: {type(result)}, keys: {result.keys() if isinstance(result, dict) else 'N/A'}")
-        completed_at = datetime.utcnow().isoformat()
-        
-        # Extract result from the message history - handle LangChain message objects
-        output = ""
-        if isinstance(result, dict):
-            messages_list = result.get("messages", [])
-            # Find the last message with actual content (skip empty messages)
-            for msg in reversed(messages_list):
-                # Handle LangChain BaseMessage objects
-                if hasattr(msg, 'content'):
-                    content = msg.content
-                    if content and isinstance(content, str) and content.strip():
-                        output = content.strip()
-                        break
-                # Handle dict format
-                elif isinstance(msg, dict):
-                    content = msg.get('content', '')
-                    if content and isinstance(content, str) and content.strip():
-                        output = content.strip()
-                        break
-            
-            # If still no output, try to get the entire result summary
-            if not output:
-                # Extract from tool calls or other parts
-                if "output" in result:
-                    output = str(result["output"])[:1000]
-                else:
-                    output = f"Deep Agent reasoning completed. Messages: {len(messages_list)} messages processed."
-        else:
-            output = str(result)[:500]
-        
-        # Stream intermediate results
-        on_thought_callback(ThoughtStep(
-            step_type="thought",
-            content=f"📊 Analyzing results...",
-            timestamp=datetime.utcnow().isoformat()
-        ))
-        
-        
-        on_thought_callback(ThoughtStep(
-            step_type="thought",
-            content=f"✨ Processing Deep Agent output...",
-            timestamp=datetime.utcnow().isoformat()
-        ))
-        
-        on_thought_callback(ThoughtStep(
-            step_type="reflection",
-            content=f"✅ Deep Agent Complete: {output[:200]}",
-            timestamp=datetime.utcnow().isoformat()
-        ))
-        
-        # Check for files created in data/files directory
-        files_created = []
-        try:
-            files_dir = Path(__file__).parent / "data" / "files"
-            if files_dir.exists():
-                for file_path in files_dir.rglob("*"):
-                    if file_path.is_file():
-                        # Get relative path for display
-                        try:
-                            rel_path = file_path.relative_to(Path(__file__).parent)
-                            files_created.append(str(rel_path))
-                            logger.info(f"[Deep Agent] Found created file: {rel_path}")
-                        except ValueError:
-                            pass
-        except Exception as e:
-            logger.warning(f"Failed to scan for created files: {e}")
-        
-        return AgentTask(
-            id=str(uuid.uuid4()),
-            description=task,
-            result=output,
-            error=None,
-            status="completed",
-            started_at=started_at,
-            completed_at=completed_at,
-            steps=[
-                ThoughtStep(
-                    step_type="reflection",
-                    content=f"Deep Agent Output:\n{output}",
-                    timestamp=completed_at
-                )
-            ],
-            metadata={"files_created": files_created} if files_created else {}
-        )
-    
-    except Exception as e:
-        logger.error(f"Deep agent execution error: {e}", exc_info=True)
-        completed_at = datetime.utcnow().isoformat()
-        
-        on_thought_callback(ThoughtStep(
-            step_type="thought",
-            content=f"❌ Deep Agent Error: {str(e)}",
-            timestamp=completed_at
-        ))
-        
-        return AgentTask(
-            id=str(uuid.uuid4()),
-            description=task,
-            result=None,
-            error=str(e),
-            status="failed",
-            started_at=started_at,
-            completed_at=completed_at,
-            steps=[]
-        )
+# ─── Agent Management ─────────────────────────────────────────────────────────
 
 
 
@@ -636,12 +308,8 @@ async def create_agent(req: CreateAgentRequest):
         raise HTTPException(400, "Provide either 'template' or 'persona'")
     
     agent = Agent(persona=persona)
-    agent.is_deep_agent = req.is_deep_agent or False
     agents[agent.id] = agent
     
-    # Save persona with deep agent flag
-    persona_data = persona.to_dict()
-    persona_data['is_deep_agent'] = agent.is_deep_agent
     save_agent_persona(persona)
     
     return {
@@ -702,22 +370,6 @@ async def reset_agent(agent_id: str):
     return {"success": True, "message": "Session reset"}
 
 
-@app.put("/api/agents/{agent_id}/deep-agent")
-async def toggle_deep_agent(agent_id: str, enable: bool = True):
-    """Toggle deep agent mode (LangChain advanced features) for an agent."""
-    agent = agents.get(agent_id)
-    if not agent:
-        raise HTTPException(404, f"Agent '{agent_id}' not found")
-    
-    agent.is_deep_agent = enable
-    save_agent_persona(agent.persona)
-    
-    status = "enabled" if enable else "disabled"
-    return {
-        "success": True,
-        "agent": agent.to_dict(),
-        "message": f"Deep agent mode {status} for '{agent.persona.name}'"
-    }
 
 
 # ─── Chat & Tasks ─────────────────────────────────────────────────────────────
@@ -770,23 +422,8 @@ async def run_task(req: TaskRequest, background_tasks: BackgroundTasks):
         # Run CPU-bound agent execution in a thread pool
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         
-        # Check if we should use deep agent mode
-        # Use deep agent if: (1) explicitly requested via use_deep_agent flag OR (2) agent has is_deep_agent=True
-        use_deep = req.use_deep_agent or agent.is_deep_agent
-        
-        if use_deep:
-            # Use Deep Agents SDK for advanced reasoning
-            agent_future = loop.run_in_executor(
-                executor, 
-                _run_deep_agent, 
-                agent, 
-                req.task, 
-                req.max_iterations,
-                on_thought
-            )
-        else:
-            # Use standard ReAct loop
-            agent_future = loop.run_in_executor(executor, agent.run, req.task, req.max_iterations)
+        # Use standard ReAct loop
+        agent_future = loop.run_in_executor(executor, agent.run, req.task, req.max_iterations)
         
         # Drain the step queue while the agent is running, streaming steps via WebSocket
         # Use shorter timeout to catch more frequent updates
@@ -1212,78 +849,133 @@ async def get_configured_providers():
 async def configure_llm(config: Dict[str, Any]):
     """Configure LLM providers.
     
-    If api_key is not provided, will use the key from environment variables (.env).
+    Updates environment variables and persists to .env file.
+    If api_key is provided, it will be saved to .env.
     """
     provider = config.get("provider")
-    api_key = config.get("api_key")  # Can be None - will use .env if not provided
+    api_key = config.get("api_key")  # Can be None
     model = config.get("model")
     
     if not provider:
         raise HTTPException(400, "Provider name required")
+    if not model:
+        raise HTTPException(400, "Model name required")
     
     import os
+    from pathlib import Path
+    from dotenv import load_dotenv
     
-    # Only override environment variable if new key is provided
+    # Map provider to env var names and model var names
+    env_mapping = {
+        "openai": ("OPENAI_API_KEY", "OPENAI_MODEL"),
+        "gemini": ("GEMINI_API_KEY", "GEMINI_MODEL"),
+        "claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"),
+    }
+    
+    if provider not in env_mapping:
+        raise HTTPException(400, f"Unknown provider: {provider}")
+    
+    api_key_var, model_var = env_mapping[provider]
+    
+    # Update environment variables in memory
     if api_key:
-        if provider == "openai":
-            os.environ["OPENAI_API_KEY"] = api_key
-        elif provider == "gemini":
-            os.environ["GEMINI_API_KEY"] = api_key
-
-        elif provider == "claude":
-            os.environ["ANTHROPIC_API_KEY"] = api_key
+        os.environ[api_key_var] = api_key
+    os.environ[model_var] = model
+    os.environ["DEFAULT_LLM_PROVIDER"] = provider
     
-    # Reinitialize the router with the selected model
-    # API key defaults to None, which means providers will use environment variables
-    from core.llm import OpenAIProvider, GeminiProvider, AnthropicProvider
+    # Persist to .env file
+    env_path = Path(".env")
+    if env_path.exists():
+        with open(env_path, "r") as f:
+            lines = f.readlines()
+        
+        # Update or add the config lines
+        updated_lines = []
+        found_api_key = False
+        found_model = False
+        found_provider = False
+        
+        for line in lines:
+            if line.startswith(api_key_var + "="):
+                if api_key:
+                    updated_lines.append(f"{api_key_var}={api_key}\n")
+                    found_api_key = True
+                else:
+                    updated_lines.append(line)  # Keep existing if no new key provided
+                    found_api_key = True
+            elif line.startswith(model_var + "="):
+                updated_lines.append(f"{model_var}={model}\n")
+                found_model = True
+            elif line.startswith("DEFAULT_LLM_PROVIDER="):
+                updated_lines.append(f"DEFAULT_LLM_PROVIDER={provider}\n")
+                found_provider = True
+            else:
+                updated_lines.append(line)
+        
+        # Add missing lines
+        if not found_api_key and api_key:
+            updated_lines.append(f"{api_key_var}={api_key}\n")
+        if not found_model:
+            updated_lines.append(f"{model_var}={model}\n")
+        if not found_provider:
+            updated_lines.append(f"DEFAULT_LLM_PROVIDER={provider}\n")
+        
+        with open(env_path, "w") as f:
+            f.writelines(updated_lines)
     
-    if provider == "openai":
-        LLM_ROUTER.register(OpenAIProvider(api_key=api_key, model=model or "gpt-4o-mini"))
-        LLM_ROUTER.set_default("openai")
-    elif provider == "gemini":
-        LLM_ROUTER.register(GeminiProvider(api_key=api_key, model=model or "gemini-1.5-flash"))
-        LLM_ROUTER.set_default("gemini")
-    elif provider == "claude":
-        LLM_ROUTER.register(AnthropicProvider(api_key=api_key, model=model or "claude-3-5-sonnet-20241022"))
-        LLM_ROUTER.set_default("claude")
+    # Reinitialize the LLM router with new config
+    from core.llm import LLMRouter
+    global LLM_ROUTER
+    LLM_ROUTER = LLMRouter()
     
-    return {"success": True, "status": LLM_ROUTER.status()}
+    return {
+        "success": True,
+        "provider": provider,
+        "model": model,
+        "message": f"LLM configured to {provider} → {model}",
+        "status": LLM_ROUTER.status()
+    }
 
 
-STATIC_MODELS = {
+PROVIDER_CONFIG = {
     'openai': {
-        'provider': 'OpenAI', 'icon': '🔴',
-        'models': ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo'],
-        'env_key': 'OPENAI_API_KEY'
+        'name': 'OpenAI',
+        'icon': '🔴',
+        'env_key': 'OPENAI_API_KEY',
+        'model_env_key': 'OPENAI_MODEL',
+        'default_model': 'gpt-4o-mini'
     },
     'gemini': {
-        'provider': 'Google Gemini', 'icon': '🔵',
-        'models': ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro'],
-        'env_key': 'GEMINI_API_KEY'
+        'name': 'Google Gemini',
+        'icon': '🔵',
+        'env_key': 'GEMINI_API_KEY',
+        'model_env_key': 'GEMINI_MODEL',
+        'default_model': 'gemini-2.5-flash'
     },
     'claude': {
-        'provider': 'Anthropic Claude', 'icon': '✨',
-        'models': ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229', 'claude-3-haiku-20240307'],
-        'env_key': 'ANTHROPIC_API_KEY'
+        'name': 'Anthropic Claude',
+        'icon': '✨',
+        'env_key': 'ANTHROPIC_API_KEY',
+        'model_env_key': 'ANTHROPIC_MODEL',
+        'default_model': 'claude-3-5-sonnet-20241022'
     },
 }
 
 @app.get("/api/llm/models")
 async def get_all_available_models():
-    """Get all available models for all providers.
-    Shows which providers are configured based on environment variables.
-    Models are listed for ALL providers, but marked as configured/unconfigured."""
+    """Get all available providers (users can use any model they want).
+    Shows which providers are configured based on environment variables."""
     providers = {}
     
-    for key, info in STATIC_MODELS.items():
-        env_val = os.getenv(info['env_key'], '').strip()
+    for key, config in PROVIDER_CONFIG.items():
+        env_val = os.getenv(config['env_key'], '').strip()
         is_configured = bool(env_val and env_val not in ('', 'your-anthropic-key-here', 'your-google-cloud-api-key-here'))
         
         providers[key] = {
-            'provider': info['provider'],
-            'icon': info['icon'],
+            'name': config['name'],
+            'icon': config['icon'],
             'configured': is_configured,
-            'models': info['models']
+            'env_key': config['env_key']
         }
     
     # Also check GOOGLE_API_KEY for gemini
@@ -1293,19 +985,17 @@ async def get_all_available_models():
     return {
         "success": True,
         "providers": providers,
-        "total_models": sum(len(v['models']) for v in providers.values()),
-        "configured_count": sum(1 for v in providers.values() if v['configured'])
+        "note": "Enter any model name you want - not limited to a predefined list"
     }
 
 @app.get("/api/llm/models/{provider}")
 async def get_provider_models(provider: str):
-    """Get models for a specific provider.
-    Returns all models for the provider regardless of configuration status."""
-    if provider not in STATIC_MODELS:
+    """Get provider info. Users can enter any model name they want."""
+    if provider not in PROVIDER_CONFIG:
         return {"success": False, "error": f"Unknown provider: {provider}"}
     
-    info = STATIC_MODELS[provider]
-    env_val = os.getenv(info['env_key'], '').strip()
+    config = PROVIDER_CONFIG[provider]
+    env_val = os.getenv(config['env_key'], '').strip()
     is_configured = bool(env_val and env_val not in ('', 'your-anthropic-key-here', 'your-google-cloud-api-key-here'))
     
     # Check GOOGLE_API_KEY for gemini
@@ -1314,10 +1004,12 @@ async def get_provider_models(provider: str):
     
     return {
         "success": True,
-        "provider": info['provider'],
-        "models": info['models'],
+        "provider": config['name'],
+        "icon": config['icon'],
         "configured": is_configured,
-        "env_key": info['env_key']
+        "env_key": config['env_key'],
+        "default_model": config['default_model'],
+        "note": "You can use any model name for this provider"
     }
 
 @app.get("/api/llm/env-status")  
@@ -1341,6 +1033,91 @@ async def get_llm_env_status():
             }
         }
     }
+
+
+@app.get("/api/llm/current-config")
+async def get_current_llm_config():
+    """Get current LLM configuration (provider and model)."""
+    current_provider = os.getenv("DEFAULT_LLM_PROVIDER", "").strip()
+    
+    # Determine actual current provider based on availability
+    if not current_provider:
+        for provider in ["openai", "gemini", "claude"]:
+            if LLM_ROUTER._providers.get(provider, {}).is_available():
+                current_provider = provider
+                break
+    
+    if not current_provider:
+        current_provider = "mock"
+    
+    # Get provider config
+    provider_config = PROVIDER_CONFIG.get(current_provider, {})
+    
+    # Get current model from env, or use default
+    current_model = os.getenv(f"{current_provider.upper()}_MODEL", "").strip()
+    if not current_model and current_provider in PROVIDER_CONFIG:
+        current_model = PROVIDER_CONFIG[current_provider]['default_model']
+    elif not current_model:
+        current_model = "mock"
+    
+    return {
+        "success": True,
+        "provider": current_provider,
+        "provider_display": provider_config.get('name', current_provider),
+        "model": current_model,
+        "icon": provider_config.get('icon', '?'),
+        "available_providers": LLM_ROUTER.available_providers()
+    }
+
+
+@app.post("/api/llm/test")
+async def test_llm_connection(config: Dict[str, Any]):
+    """Test connection to an LLM provider.
+    
+    Returns: {success, model, message, provider}
+    """
+    provider = config.get("provider", "").strip()
+    
+    if not provider:
+        raise HTTPException(400, "Provider name required")
+    
+    if provider not in LLM_ROUTER._providers:
+        raise HTTPException(400, f"Unknown provider: {provider}")
+    
+    try:
+        llm_provider = LLM_ROUTER._providers[provider]
+        
+        # Check if available
+        if not llm_provider.is_available():
+            return {
+                "success": False,
+                "provider": provider,
+                "error": f"Provider {provider} is not configured (missing API key)"
+            }
+        
+        # Test with a simple message
+        test_messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Say 'Connection successful!' in exactly those words."}
+        ]
+        
+        response = llm_provider.complete(test_messages, temperature=0.1, max_tokens=50)
+        
+        return {
+            "success": True,
+            "provider": provider,
+            "model": response.model,
+            "message": f"Connection successful! Using {response.model}",
+            "response_sample": response.content[:100]  # First 100 chars of response
+        }
+    
+    except Exception as e:
+        return {
+            "success": False,
+            "provider": provider,
+            "error": f"Connection test failed: {str(e)[:200]}"
+        }
+
 
 
 # ─── Docs ─────────────────────────────────────────────────────────────────────
@@ -1509,76 +1286,6 @@ async def mcp_stop():
         }
     except Exception as e:
         return {"success": False, "error": str(e), "message": "Failed to stop MCP server"}
-
-
-
-# ─── LangChain Integration ────────────────────────────────────────────────────
-
-_langchain_agents = {}  # Store LangChain adapters
-
-@app.post("/api/langchain/create-agent")
-async def langchain_create_agent(request: CreateAgentRequest):
-    """Create a LangChain-powered agent from an ADgents agent."""
-    try:
-        from core.langchain_integration import create_langchain_agent_from_adgent
-        
-        agent_id = request.name.lower().replace(" ", "_")
-        agent = agents.get(agent_id)
-        
-        if not agent:
-            raise ValueError(f"Agent {agent_id} not found")
-        
-        # Create LangChain adapter with all available skills
-        skills_list = list(SKILL_REGISTRY._skills.values()) if SKILL_REGISTRY else []
-        langchain_agent = create_langchain_agent_from_adgent(agent, skills_list=skills_list)
-        
-        _langchain_agents[agent_id] = langchain_agent
-        
-        return {
-            "success": True,
-            "message": f"LangChain agent created for {agent_id}",
-            "agent_id": agent_id,
-            "tools_registered": len(skills_list),
-            "type": "langchain_agent"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/langchain/run-agent")
-async def langchain_run_agent(request: ChatRequest):
-    """Run a LangChain agent."""
-    try:
-        agent_id = request.agent_id
-        user_input = request.message
-        
-        if agent_id not in _langchain_agents:
-            raise ValueError(f"LangChain agent {agent_id} not found. Create it first.")
-        
-        langchain_agent = _langchain_agents[agent_id]
-        result = await langchain_agent.run_agent(user_input)
-        
-        return {
-            "success": result.get("success", False),
-            "response": result.get("output"),
-            "memory": result.get("memory"),
-            "error": result.get("error")
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.get("/api/langchain/agents")
-async def langchain_list_agents():
-    """List all LangChain agents."""
-    agents_list = [
-        {"agent_id": agent_id, "type": "langchain_agent"}
-        for agent_id in _langchain_agents.keys()
-    ]
-    return {
-        "success": True,
-        "agents": agents_list,
-        "total": len(agents_list)
-    }
-
 
 
 

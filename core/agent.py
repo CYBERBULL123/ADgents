@@ -91,7 +91,6 @@ class Agent:
         self.llm = llm_router or LLM_ROUTER
         self.memory = memory or AgentMemory(self.persona.id)
         self.max_iterations = max_iterations
-        self.is_deep_agent = False  # LangChain deep agent flag
         
         self.status = AgentStatus.IDLE
         self.current_task: Optional[AgentTask] = None
@@ -488,7 +487,6 @@ I'll use my available tools to complete this task autonomously."""
             "name": self.name,
             "persona": self.persona.to_dict(),
             "status": self.status.value,
-            "is_deep_agent": self.is_deep_agent,
             "memory_stats": self.memory.stats(),
             "available_skills": assigned_skill_names
         }
