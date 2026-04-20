@@ -10,10 +10,9 @@ readme = "README.md"
 authors = [
   { name = "CYBERBULL123" }
 ]
-license = { text = "MIT" }
+license = "MIT"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Development Status :: 4 - Beta",
     "Topic :: Scientific/Engineering :: Artificial Intelligence"
@@ -34,7 +33,8 @@ dependencies = [
 "Bug Tracker" = "https://github.com/CYBERBULL123/ADgents/issues"
 
 [tool.setuptools]
-packages = ["core", "sdk"]
+packages = ["core"]
+py-modules = ["start", "server", "cli"]
 
 [project.scripts]
 adgents = "start:check_environment"

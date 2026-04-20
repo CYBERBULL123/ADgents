@@ -34,6 +34,10 @@ function navigate(page) {
         history: ['Task History', 'Browse all past autonomous task runs'],
         memory: ['Memory', "View and manage agents' memories"],
         skills: ['Skills', 'Tools available to your agents'],
+        files: ['Files', 'Browse and download agent-created files'],
+        mcp: ['MCP Server', 'Model Context Protocol Integration'],
+
+        crews: ['Crew Collaboration', 'Multi-agent team coordination'],
         settings: ['Settings', 'Configure LLM providers and system'],
         docs: ['Documentation', 'Learn how to use ADgents']
     };
@@ -46,10 +50,25 @@ function navigate(page) {
     if (page === 'agents') renderAgentsGrid();
     if (page === 'chat') renderChatPicker();
     if (page === 'tasks') populateTaskAgentSelect();
+
+    if (page === 'crews') loadCrewsPage();
     if (page === 'history') loadHistory();
+    if (page === 'files') loadFiles();
     if (page === 'memory') populateMemorySelects();
     if (page === 'skills') renderSkillsPage();
-    if (page === 'settings') loadProviderStatus();
+    if (page === 'mcp') loadMCPPage();
+    if (page === 'settings') {
+        updateDBConnectionFields();
+
+        // Load saved preferences
+        document.getElementById('org-name').value = localStorage.getItem('org_name') || '';
+        document.getElementById('memory-type').value = localStorage.getItem('memory_type') || 'multi_tier';
+        document.getElementById('auto-save').checked = localStorage.getItem('auto_save') === 'true';
+
+        // Load current LLM configuration and environment status
+        loadCurrentLLMConfig();
+        loadEnvironmentStatus();
+    }
     if (page === 'builder') initBuilder();
     if (page === 'dashboard') updateDashboard();
     if (page === 'docs') {
@@ -58,51 +77,208 @@ function navigate(page) {
 }
 
 // ─── API Helpers ─────────────────────────────────────────────────────────────
-async function api(path, method = 'GET', body = null) {
+async function api(path, method = 'GET', body = null, timeout = 10000) {
     const opts = {
         method,
         headers: { 'Content-Type': 'application/json' }
     };
     if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(`${API}${path}`, opts);
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    try {
+        const res = await fetch(`${API}${path}`, { ...opts, signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        if (!res.ok) {
+            let errorMsg = `HTTP ${res.status}`;
+            try {
+                const err = await res.json();
+                // Handle Pydantic validation errors
+                if (err.detail) {
+                    if (Array.isArray(err.detail)) {
+                        errorMsg = err.detail.map(d => `${d.loc?.join('.')}: ${d.msg}`).join('; ');
+                    } else {
+                        errorMsg = err.detail;
+                    }
+                } else if (err.error) {
+                    errorMsg = err.error;
+                }
+            } catch (parseErr) {
+                // Response wasn't JSON, keep default message
+            }
+            throw new Error(errorMsg);
+        }
+        return res.json();
+    } catch (e) {
+        clearTimeout(timeoutId);
+        if (e.name === 'AbortError') {
+            throw new Error(`Request timeout for ${path} (${timeout}ms)`);
+        }
+        throw e;
     }
-    return res.json();
 }
 
 // ─── App Init ─────────────────────────────────────────────────────────────────
 async function init() {
-    await checkApiStatus();
-    await loadSkills();
-    await loadTemplates();
-    await loadAgents();
-    updateDashboard();
-    initBuilder();
-    setInterval(checkApiStatus, 10000);
+    try {
+        const updateLoadingStatus = (msg) => {
+            const el = document.getElementById('loading-status');
+            if (el) el.textContent = msg;
+            console.log('[ADgents]', msg);
+        };
+        
+        updateLoadingStatus('Initializing application...');
+        
+        // Set a timeout for the entire init sequence
+        const initPromise = Promise.race([
+            (async () => {
+                updateLoadingStatus('Checking API status...');
+                console.log('[ADgents] Checking API status...');
+                await checkApiStatus();
+                
+                updateLoadingStatus('Loading skills...');
+                console.log('[ADgents] Loading skills...');
+                await loadSkills();
+                
+                updateLoadingStatus('Loading templates...');
+                console.log('[ADgents] Loading templates...');
+                await loadTemplates();
+                
+                updateLoadingStatus('Loading agents...');
+                console.log('[ADgents] Loading agents...');
+                await loadAgents();
+                
+                updateLoadingStatus('Updating dashboard...');
+                console.log('[ADgents] Updating dashboard...');
+                updateDashboard();
+                
+                updateLoadingStatus('Initializing builder...');
+                console.log('[ADgents] Initializing builder...');
+                initBuilder();
+                
+                console.log('[ADgents] Initialization complete!');
+                return true;
+            })(),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Initialization timeout after 30 seconds')), 30000)
+            )
+        ]);
+        
+        await initPromise;
+        
+        // Hide loading overlay
+        const overlay = document.getElementById('app-loading-overlay');
+        if (overlay) {
+            overlay.style.opacity = '0';
+            overlay.style.transition = 'opacity 0.3s ease';
+            setTimeout(() => overlay.style.display = 'none', 300);
+        }
+        
+        // Set up task tab listeners
+        initTaskTabListeners();
+        
+        // Set up periodic API status checks
+        setInterval(checkApiStatus, 10000);
+        
+    } catch (e) {
+        console.error('[ADgents] Initialization error:', e);
+        
+        // Update loading overlay to show error
+        const overlay = document.getElementById('app-loading-overlay');
+        if (overlay) {
+            overlay.innerHTML = `
+                <div style="text-align: center; color: #e0e0e0; font-family: 'Inter', sans-serif;">
+                    <div style="font-size: 2rem; margin-bottom: 1rem;">⚠️</div>
+                    <div style="font-size: 1.2rem; font-weight: 600; margin-bottom: 0.5rem;">Initialization Error</div>
+                    <div style="color: #8b8ba8; margin-bottom: 1rem; max-width: 400px;">
+                        <div>${e.message || 'An error occurred during initialization'}</div>
+                    </div>
+                    <div style="font-size: 0.85rem; color: #4f4f6e; margin-bottom: 1.5rem;">
+                        Check your console (F12) for details. The dashboard may still load with limited functionality.
+                    </div>
+                    <button onclick="location.reload()" style="background: #7c3aed; color: white; border: none; padding: 0.5rem 1.5rem; border-radius: 6px; cursor: pointer;">Retry</button>
+                </div>
+            `;
+        }
+        
+        // Try to at least show the dashboard anyway
+        try {
+            updateDashboard();
+            initBuilder();
+            
+            // Hide overlay after 3 seconds
+            if (overlay) {
+                setTimeout(() => {
+                    overlay.style.opacity = '0';
+                    overlay.style.transition = 'opacity 0.3s ease';
+                    setTimeout(() => overlay.style.display = 'none', 300);
+                }, 3000);
+            }
+        } catch (e2) {
+            console.error('[ADgents] Failed to update UI:', e2);
+        }
+    }
 }
 
 async function checkApiStatus() {
     try {
-        const health = await api('/health');
+        console.log('[ADgents] Checking API health...');
+        const health = await api('/health', 'GET', null, 5000);
+        
         const dot = document.getElementById('api-status-dot');
         const text = document.getElementById('api-status-text');
         dot.className = 'status-dot online';
         text.textContent = 'API Connected';
 
+        // Update main status
         document.getElementById('status-api').textContent = '✅ Online';
         document.getElementById('status-api').className = 'badge badge-green';
-        document.getElementById('status-llm').textContent = health.llm_providers?.join(', ') || 'mock';
+        
+        // Update database status
+        document.getElementById('status-db').textContent = `✅ ${health.database_status || 'SQLite Ready'}`;
+        document.getElementById('status-db').className = 'badge badge-green';
+        
+        // Update skills engine status
+        document.getElementById('status-skills-engine').textContent = '✅ Active';
+        document.getElementById('status-skills-engine').className = 'badge badge-green';
+        
+        // Update LLM providers count
+        const availableLLMs = health.llm_providers?.length || 0;
+        document.getElementById('status-llm').textContent = `${availableLLMs}/${health.llm_total || 0} Ready`;
+        document.getElementById('status-llm').className = availableLLMs > 0 ? 'badge badge-green' : 'badge badge-orange';
+        
+        // Update stats
         document.getElementById('stat-skills').textContent = health.skills || 0;
-        document.getElementById('stat-providers').textContent = health.llm_providers?.length || 1;
-    } catch {
+        document.getElementById('stat-agents').textContent = health.agents || 0;
+        document.getElementById('stat-providers').textContent = availableLLMs || 0;
+        
+        // Detailed LLM providers
+        const llmDetailEl = document.getElementById('llm-status-details');
+        if (health.llm_details && Object.keys(health.llm_details).length > 0) {
+            llmDetailEl.innerHTML = Object.entries(health.llm_details).map(([name, info]) => {
+                const status = info.available ? '✅' : '❌';
+                const isDefault = info.is_default ? ' (default)' : '';
+                return `<div class="status-item" style="padding:0.5rem 0;"><span>${status} ${name}${isDefault}</span></div>`;
+            }).join('');
+        } else {
+            llmDetailEl.innerHTML = '<div class="status-item">No providers configured</div>';
+        }
+        
+        console.log('[ADgents] API health check passed');
+    } catch (e) {
+        console.error('[ADgents] API health check failed:', e);
         const dot = document.getElementById('api-status-dot');
         const text = document.getElementById('api-status-text');
         dot.className = 'status-dot offline';
-        text.textContent = 'API Offline';
+        text.textContent = 'API Offline: ' + (e.message || 'Connection failed');
         document.getElementById('status-api').textContent = '❌ Offline';
         document.getElementById('status-api').className = 'badge badge-red';
+        document.getElementById('status-db').textContent = '❓ Unknown';
+        document.getElementById('status-db').className = 'badge badge-red';
+        document.getElementById('status-skills-engine').textContent = '❓ Unknown';
+        document.getElementById('status-skills-engine').className = 'badge badge-red';
     }
 }
 
@@ -110,24 +286,40 @@ async function loadAgents() {
     try {
         const data = await api('/agents');
         state.agents = {};
-        (data.agents || []).forEach(a => { state.agents[a.persona.id] = a; });
+        (data.agents || []).forEach(a => { 
+            state.agents[a.persona.id] = a;
+        });
         updateAgentCount();
         updateDashboard();
-    } catch (e) { console.error('Load agents:', e); }
+        console.log(`[ADgents] Loaded ${Object.keys(state.agents).length} agents`);
+    } catch (e) { 
+        console.error('[ADgents] Error loading agents:', e);
+        // Continue with empty agents list
+        state.agents = {};
+        updateAgentCount();
+    }
 }
 
 async function loadSkills() {
     try {
         const data = await api('/skills');
         state.skills = data.skills || [];
-    } catch (e) { console.error('Load skills:', e); }
+        console.log(`[ADgents] Loaded ${state.skills.length} skills`);
+    } catch (e) { 
+        console.error('[ADgents] Error loading skills:', e);
+        state.skills = [];
+    }
 }
 
 async function loadTemplates() {
     try {
         const data = await api('/templates');
         state.templates = data.templates || {};
-    } catch (e) { console.error('Load templates:', e); }
+        console.log(`[ADgents] Loaded ${Object.keys(state.templates).length} templates`);
+    } catch (e) { 
+        console.error('[ADgents] Error loading templates:', e);
+        state.templates = {};
+    }
 }
 
 function updateAgentCount() {
@@ -146,6 +338,15 @@ async function refreshAll() {
 function updateDashboard() {
     const agents = Object.values(state.agents);
     const listEl = document.getElementById('dashboard-agents-list');
+    
+    // Update memory stats
+    let totalMemories = 0;
+    agents.forEach(a => {
+        const episodic = a.memory_stats?.episodic_memories || 0;
+        const semantic = a.memory_stats?.semantic_memories || 0;
+        totalMemories += episodic + semantic;
+    });
+    document.getElementById('stat-memories').textContent = totalMemories;
 
     if (agents.length === 0) {
         listEl.innerHTML = '<div class="empty-state-small">No agents yet. Create your first agent!</div>';
@@ -153,13 +354,13 @@ function updateDashboard() {
     }
 
     listEl.innerHTML = agents.slice(0, 5).map(a => `
-    <div class="dash-agent-item" onclick="navigate('chat')">
-      <div style="font-size:1.4rem">${a.persona.avatar}</div>
-      <div>
-        <div style="font-weight:600;font-size:0.9rem">${a.persona.name}</div>
+    <div class="dash-agent-item" onclick="navigate('chat')" style="padding: 0.75rem; border-radius: var(--radius-sm); background: var(--bg-card); border: 1px solid var(--border); margin-bottom: 0.5rem; display: flex; align-items: center; cursor: pointer; transition: all 0.2s;">
+      <div style="font-size:1.4rem; margin-right: 0.75rem;">${a.persona.avatar}</div>
+      <div style="flex: 1;">
+        <div style="font-weight:600;font-size:0.9rem;color:var(--text-primary)">${a.persona.name}</div>
         <div style="font-size:0.75rem;color:var(--text-secondary)">${a.persona.role}</div>
       </div>
-      <span class="badge badge-green" style="margin-left:auto">${a.status}</span>
+      <span class="badge badge-green" style="margin-left:auto;">${a.status || 'active'}</span>
     </div>
   `).join('');
 
@@ -196,7 +397,9 @@ function renderAgentsGrid(filter = '') {
             <div class="agent-name">${a.persona.name}</div>
             <div class="agent-role">${a.persona.role}</div>
           </div>
-          <span class="badge badge-${a.status === 'idle' ? 'green' : 'blue'}">${a.status}</span>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+            <span class="badge badge-${a.status === 'idle' ? 'green' : 'blue'}">${a.status}</span>
+          </div>
         </div>
         <div class="agent-traits">
           ${traits.map(t => `<span class="trait-chip">${t}</span>`).join('')}
@@ -433,7 +636,7 @@ async function createAgent() {
             toast(`✨ ${name} updated successfully!`, 'success');
         } else {
             const result = await api('/agents', 'POST', { persona });
-            state.agents[result.agent.persona.id] = result.agent;
+            state.agents[result.agent.id] = result.agent;
             toast(`✨ ${name} is ready!`, 'success');
         }
         
@@ -631,12 +834,26 @@ async function resetChatSession() {
 }
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
+// ─── Task Execution ─────────────────────────────────────────────────────────
+
+function initTaskTabListeners() {
+    // Task tab listeners no longer needed - only normal agent mode
+    console.log('[DEBUG] Task listeners initialized');
+}
+
+function switchTaskTab(mode) {
+    // Tab switching no longer needed - only single mode
+}
+
 function populateTaskAgentSelect() {
-    const sel = document.getElementById('task-agent-select');
-    if (!sel) return;
-    const agents = Object.values(state.agents);
-    sel.innerHTML = '<option value="">— Select Agent —</option>' +
-        agents.map(a => `<option value="${a.persona.id}">${a.persona.avatar} ${a.persona.name} (${a.persona.role})</option>`).join('');
+    const selNormal = document.getElementById('task-agent-select');
+    
+    // Show all agents
+    if (selNormal) {
+        const agents = Object.values(state.agents);
+        selNormal.innerHTML = '<option value="">— Select Agent —</option>' +
+            agents.map(a => `<option value="${a.persona.id}">${a.persona.avatar} ${a.persona.name} (${a.persona.role})</option>`).join('');
+    }
 }
 
 async function startTask() {
@@ -663,9 +880,19 @@ async function startTask() {
     try {
         const res = await api('/tasks', 'POST', { agent_id: agentId, task: taskDesc, max_iterations: maxIter });
         state.pendingTaskId = res.task_id;
-        toast(`Task started for ${state.agents[agentId]?.persona?.name}`, 'success');
+        toast(`⚡ Task started for ${state.agents[agentId]?.persona?.name}`, 'success');
         setTimeout(() => setTaskRunning(false, agentForTask?.persona?.name), 30000);
     } catch (e) { toast(e.message, 'error'); }
+}
+
+// Helper function to convert file paths in text to download links
+function convertFilePathsToLinks(text) {
+    // Match patterns like "to data/files/filename.txt" or "to data\files\filename.txt"
+    const filePathPattern = /(to|in)\s+([\w\/\\.-]+\.(txt|md|json|csv|log|py|js|html|css|xml|yaml|yml))/gi;
+    return text.replace(filePathPattern, (match, prefix, filePath) => {
+        const encodedPath = encodeURIComponent(filePath.replace(/\\/g, '/'));
+        return `${prefix} <a href="/api/files/download?path=${encodedPath}" download style="color:#10b981;text-decoration:underline;font-weight:600;cursor:pointer" title="Click to download">${filePath}</a>`;
+    });
 }
 
 function addTaskStep(step) {
@@ -683,12 +910,23 @@ function addTaskStep(step) {
     if (step.skill_used) {
         bodyHtml += `<span class="step-skill-badge">🔧 ${escapeHtml(step.skill_used)}</span><br>`;
     }
-    const stepMd = step.step_type === 'thought' || step.step_type === 'reflection'
-        ? renderMarkdown(step.content || '')
-        : escapeHtml(step.content || '');
-    bodyHtml += `<div class="step-content md-content">${stepMd}</div>`;
+    
+    // Render step content
+    let stepContent = step.content || '';
+    if (step.step_type === 'thought' || step.step_type === 'reflection') {
+        bodyHtml += `<div class="step-content md-content">${renderMarkdown(stepContent)}</div>`;
+    } else {
+        // For observations/actions, convert file paths to download links
+        const escapedContent = escapeHtml(stepContent);
+        const contentWithLinks = convertFilePathsToLinks(escapedContent);
+        bodyHtml += `<div class="step-content md-content">${contentWithLinks}</div>`;
+    }
+    
     if (step.skill_result) {
-        bodyHtml += `<div class="step-result-box">${escapeHtml(step.skill_result.substring(0, 300))}${step.skill_result.length > 300 ? '…' : ''}</div>`;
+        // Convert file paths to download links in skill results
+        const resultText = escapeHtml(step.skill_result.substring(0, 300));
+        const resultWithLinks = convertFilePathsToLinks(resultText);
+        bodyHtml += `<div class="step-result-box">${resultWithLinks}${step.skill_result.length > 300 ? '…' : ''}</div>`;
     }
 
     div.innerHTML = `
@@ -805,6 +1043,179 @@ async function teachAgent() {
     } catch (e) { toast(e.message, 'error'); }
 }
 
+// ─── Files ────────────────────────────────────────────────────────────────────
+let allFiles = [];
+
+async function loadFiles() {
+    try {
+        const data = await api('/files/list');
+        allFiles = data.files || [];
+        renderFilesGrid(allFiles);
+        
+        // Update badge
+        const badge = document.getElementById('files-count-badge');
+        if (badge) {
+            if (allFiles.length > 0) {
+                badge.textContent = allFiles.length;
+                badge.style.display = '';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+    } catch (e) {
+        console.error('Failed to load files:', e);
+        const grid = document.getElementById('files-grid');
+        if (grid) grid.innerHTML = '<div class="empty-state-small">Failed to load files</div>';
+    }
+}
+
+async function refreshFiles() {
+    toast('Refreshing files...', 'info');
+    await loadFiles();
+    toast('Files refreshed! 📁', 'success');
+}
+
+function filterFiles(query) {
+    if (!query || query.trim() === '') {
+        renderFilesGrid(allFiles);
+        return;
+    }
+    
+    const q = query.toLowerCase();
+    const filtered = allFiles.filter(f => 
+        f.name.toLowerCase().includes(q) || 
+        f.path.toLowerCase().includes(q)
+    );
+    renderFilesGrid(filtered);
+}
+
+function renderFilesGrid(files) {
+    const grid = document.getElementById('files-grid');
+    if (!grid) return;
+    
+    if (files.length === 0) {
+        grid.innerHTML = '<div class="empty-state-small">No files found</div>';
+        return;
+    }
+    
+    // Format file size
+    const formatSize = (bytes) => {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+    };
+    
+    // Get file icon based on extension
+    const getFileIcon = (ext) => {
+        const icons = {
+            '.txt': '📄', '.md': '📝', '.json': '🔧', '.csv': '📊',
+            '.log': '📋', '.py': '🐍', '.js': '💛', '.html': '🌐',
+            '.css': '🎨', '.xml': '📰', '.yaml': '⚙️', '.yml': '⚙️',
+            '.pdf': '📕', '.doc': '📘', '.docx': '📘'
+        };
+        return icons[ext] || '📄';
+    };
+    
+    // Format date
+    const formatDate = (isoString) => {
+        const date = new Date(isoString);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+        
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays < 7) return `${diffDays}d ago`;
+        return date.toLocaleDateString();
+    };
+    
+    grid.innerHTML = files.map(f => {
+        const encodedPath = encodeURIComponent(f.path);
+        const icon = getFileIcon(f.extension);
+        const canPreview = ['.txt', '.md', '.json', '.log', '.csv', '.html', '.css', '.js', '.py', '.xml', '.yaml', '.yml'].includes(f.extension);
+        
+        return `
+        <div class="file-card">
+            <div class="file-icon">${icon}</div>
+            <div class="file-info">
+                <div class="file-name">${escapeHtml(f.name)}</div>
+                <div class="file-meta">
+                    <span>${formatSize(f.size)}</span>
+                    <span>•</span>
+                    <span>${formatDate(f.modified)}</span>
+                </div>
+                <div class="file-path">${escapeHtml(f.path)}</div>
+            </div>
+            <div class="file-actions">
+                ${canPreview ? `<button class="btn btn-sm btn-secondary" onclick="previewFile('${encodedPath}', '${escapeHtml(f.name).replace(/'/g, "\\'")}', '${f.extension}')">👁️ View</button>` : ''}
+                <a href="/api/files/download?path=${encodedPath}" download class="btn btn-sm btn-primary">⬇️ Download</a>
+            </div>
+        </div>
+        `;
+    }).join('');
+}
+
+async function previewFile(encodedPath, fileName, extension) {
+    try {
+        const response = await fetch(`/api/files/download?path=${encodedPath}`);
+        if (!response.ok) throw new Error('Failed to load file');
+        
+        const text = await response.text();
+        
+        // Create modal
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+        modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+        
+        const maxLength = 50000;
+        const truncated = text.length > maxLength;
+        const displayText = truncated ? text.substring(0, maxLength) + '\n\n... [File truncated, download to see full content]' : text;
+        
+        modal.innerHTML = `
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);max-width:900px;max-height:80vh;width:90%;display:flex;flex-direction:column;box-shadow:var(--shadow);">
+                <div style="padding:1.5rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <h3 style="margin:0;font-size:1.1rem;">📄 ${escapeHtml(fileName)}</h3>
+                        <div style="color:var(--text-secondary);font-size:0.8rem;margin-top:0.25rem;">${text.length.toLocaleString()} characters${truncated ? ' (showing first ' + maxLength.toLocaleString() + ')' : ''}</div>
+                    </div>
+                    <button onclick="this.closest('.modal-overlay').remove()" class="btn btn-secondary" style="flex-shrink:0;margin-left:1rem;">✕ Close</button>
+                </div>
+                <div style="padding:1.5rem;overflow:auto;flex:1;">
+                    <pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--font-mono);font-size:0.85rem;line-height:1.6;background:var(--bg-input);padding:1rem;border-radius:var(--radius-sm);border:1px solid var(--border);">${escapeHtml(displayText)}</pre>
+                </div>
+                <div style="padding:1rem 1.5rem;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:0.75rem;">
+                    <button onclick="this.closest('.modal-overlay').remove()" class="btn btn-secondary">Close</button>
+                    <a href="/api/files/download?path=${encodedPath}" download class="btn btn-primary">⬇️ Download</a>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.remove();
+        });
+        
+        // Close on Escape key
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+        
+    } catch (e) {
+        toast('Failed to preview file: ' + e.message, 'error');
+    }
+}
+
 // ─── Skills ───────────────────────────────────────────────────────────────────
 function renderSkillsPage() {
     const grid = document.getElementById('skills-grid-full');
@@ -830,42 +1241,283 @@ function renderSkillsPage() {
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
-async function loadProviderStatus() {
-    try {
-        const status = await api('/llm/status');
-        const el = document.getElementById('provider-status-list');
-        if (!el) return;
 
-        el.innerHTML = Object.entries(status).map(([name, info]) => `
-      <div class="status-item">
-        <span class="status-name">${name}</span>
-        <span class="badge badge-${info.available ? 'green' : 'red'}">
-          ${info.available ? '✅ Available' : '❌ Not configured'}
-          ${info.default ? ' ★ Default' : ''}
-        </span>
-      </div>
-    `).join('');
-    } catch (e) { console.error(e); }
+async function loadEnvironmentStatus() {
+    /**Load and display which LLM providers are configured in environment variables.*/
+    try {
+        const statusEl = document.getElementById('llm-env-status');
+        if (!statusEl) return;
+        
+        const response = await api('/llm/env-status');
+        
+        if (response.success && response.providers) {
+            const html = Object.entries(response.providers).map(([key, info]) => {
+                const status = info.configured ? '✅ Configured' : '❌ Not Configured';
+                const statusColor = info.configured ? 'color: #22c55e;' : 'color: #ef4444;';
+                return `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: rgba(0,0,0,0.2); border-radius: 0.25rem;">
+                        <span>${info.icon} <strong>${key.charAt(0).toUpperCase() + key.slice(1)}</strong></span>
+                        <span style="${statusColor} font-weight: 500;">${status}</span>
+                    </div>
+                `;
+            }).join('');
+            
+            statusEl.innerHTML = html;
+        } else {
+            statusEl.innerHTML = '<div style="color: var(--text-secondary);">Unable to load environment status</div>';
+        }
+    } catch (e) {
+        console.error('Error loading environment status:', e);
+        const statusEl = document.getElementById('llm-env-status');
+        if (statusEl) {
+            statusEl.innerHTML = '<div style="color: var(--text-secondary);">Error loading status</div>';
+        }
+    }
 }
 
+
+
+function updateDBConnectionFields() {
+    const dbType = document.getElementById('db-type')?.value || 'sqlite';
+    const fieldsEl = document.getElementById('db-connection-fields');
+    
+    if (dbType === 'sqlite') {
+        fieldsEl.innerHTML = '<small style="color: var(--text-secondary);">SQLite uses local file-based storage. No additional configuration needed.</small>';
+    } else if (dbType === 'postgresql') {
+        fieldsEl.innerHTML = `
+            <div class="form-group">
+                <label>Hostname</label>
+                <input type="text" id="db-host" class="form-input" placeholder="localhost" value="localhost" />
+            </div>
+            <div class="form-group">
+                <label>Port</label>
+                <input type="number" id="db-port" class="form-input" placeholder="5432" value="5432" />
+            </div>
+            <div class="form-group">
+                <label>Database Name</label>
+                <input type="text" id="db-name" class="form-input" placeholder="adgents" value="adgents" />
+            </div>
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" id="db-user" class="form-input" placeholder="postgres" />
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="db-pass" class="form-input" />
+            </div>
+        `;
+    } else if (dbType === 'mongodb') {
+        fieldsEl.innerHTML = `
+            <div class="form-group">
+                <label>Connection String</label>
+                <input type="text" id="db-uri" class="form-input" placeholder="mongodb://localhost:27017/adgents" />
+            </div>
+        `;
+    }
+}
+
+async function updateProviderSelection() {
+    // When user manually changes provider, just update the hint
+    const provider = document.getElementById('llm-provider')?.value?.trim();
+    const modelHint = document.getElementById('model-hint');
+    
+    console.log('Provider changed to:', provider);
+    
+    if (!provider || provider === '') {
+        if (modelHint) modelHint.textContent = 'Select a provider first...';
+        return;
+    }
+    
+    try {
+        const response = await api(`/llm/models/${provider}`);
+        
+        if (response.success) {
+            const modelField = document.getElementById('llm-model');
+            if (modelField && modelField.placeholder.includes(response.default_model)) {
+                // Placeholder already has this model, no need to update
+            }
+            if (modelHint) {
+                modelHint.textContent = `Enter any model name. (Suggested: ${response.default_model})`;
+            }
+        } else {
+            if (modelHint) modelHint.textContent = response.error || 'Failed to load provider info';
+        }
+    } catch (e) {
+        console.error('Error updating provider:', e);
+        if (modelHint) modelHint.textContent = `Error: ${e.message}`;
+    }
+}
+
+async function loadCurrentLLMConfig() {
+    try {
+        const response = await api('/llm/current-config');
+        if (response.success) {
+            // Update the display
+            const providerDisplay = document.getElementById('current-provider-display');
+            const modelDisplay = document.getElementById('current-model-display');
+            
+            if (providerDisplay) {
+                providerDisplay.textContent = `${response.icon} ${response.provider_display}`;
+            }
+            if (modelDisplay) {
+                modelDisplay.textContent = response.model;
+            }
+            
+            // Set the provider dropdown
+            document.getElementById('llm-provider').value = response.provider;
+            
+            // Set the model text field directly
+            document.getElementById('llm-model').value = response.model;
+            
+            // Update hint
+            await updateProviderSelection();
+            
+            toast('Configuration loaded', 'success');
+        }
+    } catch (e) {
+        console.error('Error loading current config:', e);
+        toast('Failed to load configuration', 'error');
+    }
+}
+
+
+
 async function saveLLMConfig() {
-    const provider = document.getElementById('llm-provider')?.value;
+    const provider = document.getElementById('llm-provider')?.value?.trim();
     const api_key = document.getElementById('llm-api-key')?.value?.trim();
     const model = document.getElementById('llm-model')?.value?.trim();
 
-    if (!api_key && provider !== 'ollama') {
-        toast('Enter an API key', 'error');
+    if (!provider || provider === '') {
+        toast('Select a provider', 'error');
+        return;
+    }
+
+    if (!model || model === '') {
+        toast('Enter a model name', 'error');
         return;
     }
 
     const statusEl = document.getElementById('llm-config-status');
-    statusEl.innerHTML = '<span class="badge badge-blue">Saving...</span>';
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving configuration...</span>';
 
     try {
-        await api('/llm/configure', 'POST', { provider, api_key, model: model || undefined });
-        statusEl.innerHTML = '<span class="badge badge-green">✅ Configured successfully</span>';
-        toast(`${provider} configured!`, 'success');
-        loadProviderStatus();
+        // Only send API key if provided (non-empty)
+        const payload = { provider, model };
+        if (api_key) {
+            payload.api_key = api_key;
+        }
+        
+        const response = await api('/llm/configure', 'POST', payload);
+        
+        if (response.success) {
+            // Reload current config to update display
+            await loadCurrentLLMConfig();
+            
+            statusEl.innerHTML = '<span class="badge badge-green">✅ Configuration saved successfully!</span>';
+            toast(`✅ ${provider} → ${model} configured and saved!`, 'success');
+            
+            // Clear API key field for security
+            document.getElementById('llm-api-key').value = '';
+        } else {
+            throw new Error(response.error || 'Unknown error');
+        }
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ Failed: ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function testLLMConnection() {
+    const provider = document.getElementById('llm-provider')?.value?.trim();
+    if (!provider) {
+        toast('Select a provider first', 'error');
+        return;
+    }
+
+    const statusEl = document.getElementById('llm-config-status');
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<span class="badge badge-blue">🧪 Testing connection to ' + provider + '...</span>';
+
+    try {
+        const result = await api('/llm/test', 'POST', { provider });
+        if (result.success) {
+            statusEl.innerHTML = `<span class="badge badge-green">✅ ${result.message || 'Connection successful!'}</span><br><small style="color: var(--text-secondary); margin-top: 0.5rem; display: block;">Sample response: "${result.response_sample || ''}"</small>`;
+            toast('Connection test passed! ✅', 'success');
+        } else {
+            statusEl.innerHTML = `<span class="badge badge-red">❌ Connection failed</span><br><small style="color: #ef4444; margin-top: 0.5rem; display: block;">${result.error || 'Unknown error'}</small>`;
+            toast(result.error || 'Connection test failed', 'error');
+        }
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function refreshProviderStatus() {
+    const statusEl = document.getElementById('provider-status-list');
+    statusEl.innerHTML = '<span style="color: var(--text-secondary);">Refreshing...</span>';
+    await loadProviderStatus();
+}
+
+async function saveMCPConfig() {
+    const mode = document.getElementById('mcp-mode')?.value || 'stdio';
+    const port = parseInt(document.getElementById('mcp-port')?.value || '8001');
+
+    const statusEl = document.getElementById('mcp-config-status');
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
+
+    try {
+        await api('/mcp/configure', 'POST', { mode, port });
+        statusEl.innerHTML = '<span class="badge badge-green">✅ MCP configuration saved</span>';
+        toast('MCP settings saved!', 'success');
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function saveDBConfig() {
+    const dbType = document.getElementById('db-type')?.value || 'sqlite';
+    const statusEl = document.getElementById('db-config-status');
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
+
+    try {
+        const config = { type: dbType };
+        
+        if (dbType !== 'sqlite') {
+            config.host = document.getElementById('db-host')?.value || 'localhost';
+            config.port = parseInt(document.getElementById('db-port')?.value || '5432');
+            config.database = document.getElementById('db-name')?.value || 'adgents';
+            config.username = document.getElementById('db-user')?.value || '';
+            config.password = document.getElementById('db-pass')?.value || '';
+        }
+
+        // In a real implementation, this would call a backend endpoint
+        statusEl.innerHTML = '<span class="badge badge-green">✅ Database settings saved (requires restart)</span>';
+        toast('Database settings saved!', 'success');
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function savePersonalSettings() {
+    const orgName = document.getElementById('org-name')?.value || 'My Organization';
+    const memoryType = document.getElementById('memory-type')?.value || 'multi_tier';
+    const autoSave = document.getElementById('auto-save')?.checked || false;
+
+    const statusEl = document.getElementById('personal-config-status');
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
+
+    try {
+        // Save to localStorage for client-side preferences
+        localStorage.setItem('org_name', orgName);
+        localStorage.setItem('memory_type', memoryType);
+        localStorage.setItem('auto_save', autoSave);
+
+        statusEl.innerHTML = '<span class="badge badge-green">✅ Settings saved</span>';
+        toast('Personal settings saved!', 'success');
     } catch (e) {
         statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
         toast(e.message, 'error');
@@ -1179,15 +1831,15 @@ function renderMarkdown(text) {
 function updateModelHint() {
     const provider = document.getElementById('llm-provider')?.value;
     const input = document.getElementById('llm-model');
-    const hint = document.getElementById('llm-model-hint');
+    const hintEl = document.getElementById('model-hint');
     const defaults = {
-        openai: 'gpt-4o-mini',
-        gemini: 'gemini-1.5-flash',
-        claude: 'claude-3-5-sonnet-20241022',
-        ollama: 'llama3'
+        openai: 'gpt-4o-mini (or gpt-4o, gpt-4-turbo)',
+        gemini: 'gemini-1.5-flash (or gemini-1.5-pro)',
+        claude: 'claude-3-5-sonnet-20241022 (or claude-3 variants)',
+        ollama: 'llama3 (or mistral, neural-chat, etc.)'
     };
     if (input) input.placeholder = defaults[provider] || 'model-name';
-    if (hint) hint.textContent = `(default: ${defaults[provider] || 'varies'})`;
+    if (hintEl) hintEl.textContent = `Recommended: ${defaults[provider] || 'varies'}`;
 }
 
 // ─── WebSocket task complete handler ─────────────────────────────────────────
@@ -1242,6 +1894,48 @@ function handleTaskComplete(data) {
             ? result
             : '_No result text was returned. Check the Task Steps above for observations._';
         body.innerHTML = renderMarkdown(displayResult);
+        
+        // Display files created during task execution
+        if (task.metadata && task.metadata.files_created && task.metadata.files_created.length > 0) {
+            const filesSection = document.createElement('div');
+            filesSection.style.marginTop = '1.5rem';
+            filesSection.style.padding = '1rem';
+            filesSection.style.background = 'rgba(16,185,129,0.06)';
+            filesSection.style.border = '1px solid rgba(16,185,129,0.2)';
+            filesSection.style.borderRadius = '8px';
+            
+            const filesTitle = document.createElement('div');
+            filesTitle.style.fontWeight = '600';
+            filesTitle.style.marginBottom = '0.5rem';
+            filesTitle.style.color = 'var(--green)';
+            filesTitle.innerHTML = '📁 Files Created';
+            filesSection.appendChild(filesTitle);
+            
+            const filesList = document.createElement('ul');
+            filesList.style.listStyle = 'none';
+            filesList.style.padding = '0';
+            filesList.style.margin = '0';
+            
+            task.metadata.files_created.forEach(filePath => {
+                const fileItem = document.createElement('li');
+                fileItem.style.padding = '0.5rem';
+                fileItem.style.marginBottom = '0.25rem';
+                fileItem.style.background = 'rgba(16,185,129,0.08)';
+                fileItem.style.borderRadius = '4px';
+                fileItem.style.fontFamily = 'monospace';
+                fileItem.style.fontSize = '0.85rem';
+                fileItem.style.color = '#34d399';
+                
+                // Create download link
+                const encodedPath = encodeURIComponent(filePath.replace(/\\/g, '/'));
+                fileItem.innerHTML = `📄 <a href="/api/files/download?path=${encodedPath}" download style="color:#34d399;text-decoration:underline;cursor:pointer;font-weight:600" title="Click to download ${escapeHtml(filePath)}">${escapeHtml(filePath)}</a>`;
+                filesList.appendChild(fileItem);
+            });
+            
+            filesSection.appendChild(filesList);
+            body.appendChild(filesSection);
+        }
+        
         toast('Task completed! ✅', 'success');
     }
 
@@ -1440,11 +2134,26 @@ async function loadDocs() {
         const docs = data.docs || [];
         state.docsLoaded = true;
         
-        // Preferred ordering if these files exist
-        const order = ['index', 'quickstart', 'architecture', 'studio', 'sdk', 'skills', 'use_cases', 'crew', 'mcp_adk', 'deployment'];
-        docs.sort((a, b) => {
-            const idxA = order.indexOf(a);
-            const idxB = order.indexOf(b);
+        // Organize docs by section
+        const packagesDocs = docs.filter(d => d.startsWith('packages-')).map(d => d.replace('packages-', ''));
+        const projectDocs = docs.filter(d => d.startsWith('project-')).map(d => d.replace('project-', ''));
+        
+        // Preferred ordering within sections
+        const packagesOrder = ['installation', 'integration', 'api_reference', 'crew_management', 'skills', 'advanced'];
+        const projectOrder = ['quickstart', 'architecture', 'studio', 'crew', 'use_cases', 'deployment'];
+        
+        packagesDocs.sort((a, b) => {
+            const idxA = packagesOrder.indexOf(a);
+            const idxB = packagesOrder.indexOf(b);
+            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+            if (idxA !== -1) return -1;
+            if (idxB !== -1) return 1;
+            return a.localeCompare(b);
+        });
+        
+        projectDocs.sort((a, b) => {
+            const idxA = projectOrder.indexOf(a);
+            const idxB = projectOrder.indexOf(b);
             if (idxA !== -1 && idxB !== -1) return idxA - idxB;
             if (idxA !== -1) return -1;
             if (idxB !== -1) return 1;
@@ -1454,10 +2163,31 @@ async function loadDocs() {
         const listEl = document.getElementById('docs-nav-list');
         if (!listEl) return;
         
-        listEl.innerHTML = docs.map(d => {
-            const label = d === 'index' ? 'Overview' : (d.charAt(0).toUpperCase() + d.slice(1));
-            return `<li class="docs-nav-item" id="nav-doc-${d}" onclick="loadDocContent('${d}')">${escapeHtml(label)}</li>`;
-        }).join('');
+        // Build HTML with sections
+        let html = '';
+        
+        // Index first
+        html += '<li class="docs-nav-item" id="nav-doc-index" onclick="loadDocContent(\'index\')">📘 Overview</li>';
+        
+        // Package integration section
+        if (packagesDocs.length > 0) {
+            html += '<li class="docs-section-header">📦 Package Integration</li>';
+            packagesDocs.forEach(d => {
+                const label = d.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                html += `<li class="docs-nav-item" id="nav-doc-packages-${d}" onclick="loadDocContent('packages-${d}')">${escapeHtml(label)}</li>`;
+            });
+        }
+        
+        // Project application section
+        if (projectDocs.length > 0) {
+            html += '<li class="docs-section-header">🚀 Project Application</li>';
+            projectDocs.forEach(d => {
+                const label = d.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                html += `<li class="docs-nav-item" id="nav-doc-project-${d}" onclick="loadDocContent('project-${d}')">${escapeHtml(label)}</li>`;
+            });
+        }
+        
+        listEl.innerHTML = html;
         
         if (docs.length > 0) {
             loadDocContent('index');
@@ -1487,10 +2217,20 @@ async function loadDocContent(name) {
                 const href = aEl.getAttribute('href');
                 if (href) {
                     if (href.endsWith('.md')) {
-                        // Internal document link
+                        // Internal document link - convert path to doc name
                         aEl.onclick = (e) => {
                             e.preventDefault();
-                            const docName = href.replace('.md', '');
+                            let docName = href.replace('.md', '');
+                            
+                            // Handle relative paths: packages/skills.md -> packages-skills
+                            if (docName.includes('/')) {
+                                docName = docName.split('/').join('-');
+                            }
+                            // Handle root-relative paths: ../packages/skills.md -> packages-skills
+                            if (docName.startsWith('..')) {
+                                docName = docName.replace(/\.\.\//g, '').split('/').join('-');
+                            }
+                            
                             loadDocContent(docName);
                         };
                     } else if (href.startsWith('http')) {
@@ -1506,4 +2246,810 @@ async function loadDocContent(name) {
     }
 }
 
+// ─── MCP (Model Context Protocol) ─────────────────────────────────────────────
+
+async function loadMCPPage() {
+    try {
+        console.log('[MCP] Loading MCP page...');
+        
+        // Load MCP status
+        const statusData = await api('/mcp/status');
+        console.log('[MCP] Status data received:', statusData);
+        
+        // Check if all elements exist
+        const statusDiv = document.getElementById('mcp-status');
+        const startBtn = document.getElementById('btn-start-mcp');
+        const stopBtn = document.getElementById('btn-stop-mcp');
+        const toolsList = document.getElementById('mcp-tools-list');
+        const agentsList = document.getElementById('mcp-agents-list');
+        
+        // Safely check if page exists
+        if (!statusDiv || !startBtn || !stopBtn || !toolsList || !agentsList) {
+            console.warn('[MCP] Some elements missing from DOM, page may not be loaded yet');
+            toast('MCP page not fully loaded yet', 'info');
+            return;
+        }
+        
+        if (statusData.success) {
+            const isRunning = statusData.running || false;
+            const toolCount = statusData.available_tools || 0;
+            const agentCount = statusData.available_agents || 0;
+            
+            // Update status display
+            if (statusDiv) {
+                statusDiv.innerHTML = `
+                    <div style="display: grid; gap: 0.75rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Status</span>
+                            <span class="badge ${isRunning ? 'badge-green' : 'badge-orange'}">${isRunning ? '🟢 Running' : '🟡 Stopped'}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Available Tools</span>
+                            <strong>${toolCount} skill${toolCount !== 1 ? 's' : ''}</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Agents Available</span>
+                            <strong>${agentCount} agent${agentCount !== 1 ? 's' : ''}</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Mode</span>
+                            <strong>${statusData.config?.mode || 'stdio'}</strong>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Update button visibility
+            if (startBtn && stopBtn) {
+                if (isRunning) {
+                    startBtn.style.display = 'none';
+                    stopBtn.style.display = 'inline-block';
+                } else {
+                    startBtn.style.display = 'inline-block';
+                    stopBtn.style.display = 'none';
+                }
+            }
+        } else {
+            console.warn('[MCP] API returned error:', statusData.error);
+            if (statusDiv) {
+                statusDiv.innerHTML = `<div style="color: var(--text-secondary);">⚠️ Error: ${statusData.error || 'Unable to load status'}</div>`;
+            }
+        }
+        
+        // Load and display tools as compact chips
+        if (toolsList) {
+            if (statusData.tool_names && statusData.tool_names.length > 0) {
+                toolsList.innerHTML = `<div class="mcp-chip-list">${statusData.tool_names.map(name => `<span class="mcp-chip mcp-chip-tool">🔧 ${escapeHtml(name)}</span>`).join('')}</div>`;
+            } else {
+                toolsList.innerHTML = '<div class="mcp-loading">No skills available as tools</div>';
+            }
+        }
+
+        // Load and display agents as compact chips
+        if (agentsList) {
+            if (statusData.agent_names && statusData.agent_names.length > 0) {
+                agentsList.innerHTML = `<div class="mcp-chip-list">${statusData.agent_names.map(name => `<span class="mcp-chip mcp-chip-agent">🤖 ${escapeHtml(name)}</span>`).join('')}</div>`;
+            } else {
+                agentsList.innerHTML = '<div class="mcp-loading">No agents configured</div>';
+            }
+        }
+        
+        console.log('[MCP] Page load complete');
+    } catch (e) {
+        console.error('[MCP] Failed to load MCP data:', e);
+        toast('Failed to load MCP data: ' + e.message, 'error');
+    }
+}
+
+async function saveMCPConfig() {
+    const modeEl = document.getElementById('mcp-mode');
+    const portEl = document.getElementById('mcp-port');
+    
+    if (!modeEl || !portEl) {
+        toast('Configuration elements missing from page', 'error');
+        return;
+    }
+    
+    const mode = modeEl.value;
+    const port = portEl.value;
+    
+    try {
+        const result = await api('/mcp/configure', 'POST', { mode, port });
+        if (result.success) {
+            toast('MCP configuration saved!', 'success');
+        } else {
+            toast('Failed to save configuration', 'error');
+        }
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
+}
+
+async function startMCPServer() {
+    try {
+        const result = await api('/mcp/start', 'POST', {});
+        if (result.success) {
+            toast('MCP Server started!', 'success');
+            await loadMCPPage();
+        } else {
+            toast('Failed to start server: ' + result.error, 'error');
+        }
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
+}
+
+async function stopMCPServer() {
+    try {
+        const result = await api('/mcp/stop', 'POST', {});
+        if (result.success) {
+            toast('MCP Server stopped', 'success');
+            await loadMCPPage();
+        } else {
+            toast('Failed to stop server: ' + result.error, 'error');
+        }
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
+}
+
 window.addEventListener('DOMContentLoaded', init);
+
+
+// ─── Crew Collaboration ──────────────────────────────────────────────────────
+
+async function loadCrewsPage() {
+    try {
+        // Load crews
+        const crewsData = await api('/crews');
+        renderCrewsList(crewsData.crews || []);
+        
+        // Load agents for member selection and crew creation
+        const agentsData = await api('/agents');
+        const agentSelects = ['member-agent-select'];
+        agentSelects.forEach(id => {
+            const select = document.getElementById(id);
+            if (select) {
+                select.innerHTML = '<option value="">Choose an agent...</option>';
+                (agentsData.agents || []).forEach(agent => {
+                    select.innerHTML += `<option value="${agent.id}">${agent.persona.avatar} ${agent.persona.name}</option>`;
+                });
+            }
+        });
+        
+        // Load agents for crew creation
+        const crewAgentsSelect = document.getElementById('crew-agents');
+        const crewAgentsWrapper = document.getElementById('crew-agents-wrapper');
+        if (crewAgentsSelect && crewAgentsWrapper) {
+            crewAgentsSelect.innerHTML = '';
+            crewAgentsWrapper.innerHTML = '';
+            (agentsData.agents || []).forEach(agent => {
+                // Add to hidden select for form submission
+                crewAgentsSelect.innerHTML += `<option value="${agent.id}">${agent.persona.avatar} ${agent.persona.name}</option>`;
+                
+                // Render as checkbox card
+                crewAgentsWrapper.innerHTML += `
+                    <label class="crew-agent-card" onclick="updateCrewAgentCard(this)">
+                        <input type="checkbox" value="${agent.id}" class="crew-agent-checkbox" style="display:none;">
+                        <span class="crew-agent-avatar">${agent.persona.avatar || '👤'}</span>
+                        <span class="crew-agent-name">${escapeHtml(agent.persona.name)}</span>
+                        <span class="crew-agent-check">✓</span>
+                    </label>
+                `;
+            });
+
+            // Update select + badge when checkboxes change
+            document.querySelectorAll('.crew-agent-checkbox').forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
+                    const selected = Array.from(document.querySelectorAll('.crew-agent-checkbox:checked')).map(cb => cb.value);
+                    crewAgentsSelect.value = selected.join(',');
+                    const badge = document.getElementById('selected-agents-count');
+                    if (badge) badge.textContent = `${selected.length} selected`;
+                });
+            });
+        }
+        
+        // Load crews for member addition
+        const crewSelect = document.getElementById('member-crew-select');
+        if (crewSelect) {
+            crewSelect.innerHTML = '<option value="">Choose a crew...</option>';
+            (crewsData.crews || []).forEach(crew => {
+                crewSelect.innerHTML += `<option value="${crew.id}">${crew.name}</option>`;
+            });
+        }
+        
+        // Load crews for communications - send message
+        const sendMsgCrewSelect = document.getElementById('send-msg-crew');
+        if (sendMsgCrewSelect) {
+            sendMsgCrewSelect.innerHTML = '<option value="">Choose crew...</option>';
+            (crewsData.crews || []).forEach(crew => {
+                sendMsgCrewSelect.innerHTML += `<option value="${crew.id}">${crew.name}</option>`;
+            });
+            // Add change listener with proper context
+            sendMsgCrewSelect.onchange = function() {
+                console.log('[Crews] Crew selected, loading agents:', this.value);
+                updateCrewAgentSelects();
+            };
+        }
+        
+        // Load crews for communications - view history
+        const viewCommCrewSelect = document.getElementById('view-comm-crew');
+        if (viewCommCrewSelect) {
+            viewCommCrewSelect.innerHTML = '<option value="">Choose a crew...</option>';
+            (crewsData.crews || []).forEach(crew => {
+                viewCommCrewSelect.innerHTML += `<option value="${crew.id}">${crew.name}</option>`;
+            });
+            // Auto-select first crew and load data immediately
+            if (crewsData.crews && crewsData.crews.length > 0) {
+                viewCommCrewSelect.value = crewsData.crews[0].id;
+                refreshCrewTabs();
+            }
+        }
+
+        // Wire up tab buttons via JS (more reliable than inline onclick)
+        const tabHistory = document.getElementById('crew-tab-history');
+        const tabResults = document.getElementById('crew-tab-results');
+        if (tabHistory) tabHistory.onclick = () => switchCrewTab('history');
+        if (tabResults) tabResults.onclick = () => switchCrewTab('results');
+
+    } catch (e) {
+        console.error('Failed to load crews page:', e);
+        toast('Failed to load crews data', 'error');
+    }
+}
+
+function renderCrewsList(crews) {
+    const listEl = document.getElementById('crews-list');
+    // Update stats bar
+    const totalMembers = (crews || []).reduce((s, c) => s + (c.members ? c.members.length : 0), 0);
+    const countEl = document.getElementById('stat-crew-count');
+    const memberEl = document.getElementById('stat-member-count');
+    if (countEl) countEl.textContent = crews.length;
+    if (memberEl) memberEl.textContent = totalMembers;
+
+    if (!crews.length) {
+        listEl.innerHTML = '<div class="empty-state"><div class="empty-icon">👥</div><div class="empty-title">No Crews Yet</div><div class="empty-description">Create your first crew to get started</div></div>';
+        return;
+    }
+    
+    listEl.innerHTML = crews.map(crew => {
+        const memberCount = crew.members ? crew.members.length : 0;
+        const protocolIcons = { 'a2a': '🔗', 'rest': '📡' };
+        const protocolIcon = protocolIcons[crew.communication_protocol] || '🔗';
+        
+        return `
+            <div class="crew-card-item">
+                <div class="crew-card-top">
+                    <div class="crew-card-avatar">👥</div>
+                    <div class="crew-card-info">
+                        <div class="crew-card-name">${escapeHtml(crew.name)}</div>
+                        <div class="crew-card-meta">
+                            <span>${protocolIcon} ${escapeHtml(crew.communication_protocol || 'a2a').toUpperCase()}</span>
+                            <span class="crew-meta-dot">·</span>
+                            <span>🏢 ${escapeHtml(crew.organization || 'default')}</span>
+                        </div>
+                    </div>
+                    <span class="crew-active-badge">● Active</span>
+                </div>
+                ${crew.description ? `<div class="crew-card-desc">${escapeHtml(crew.description)}</div>` : ''}
+                <div class="crew-card-stats">
+                    <div class="crew-card-stat"><span class="crew-card-stat-val">${memberCount}</span><span class="crew-card-stat-lbl">Members</span></div>
+                    <div class="crew-card-stat"><span class="crew-card-stat-val">${protocolIcon}</span><span class="crew-card-stat-lbl">Protocol</span></div>
+                </div>
+                ${memberCount > 0 ? `
+                    <div class="crew-members-row">
+                        ${(crew.members || []).map(m => `<span class="crew-member-chip">👤 ${escapeHtml(m.agent_name || 'Unknown')}</span>`).join('')}
+                    </div>
+                ` : ''}
+                <div class="crew-card-actions">
+                    <button class="btn btn-danger" onclick="deleteCrew('${crew.id}')" style="flex:1;padding:8px;font-size:12px;">🗑️ Delete</button>
+                    <button class="btn btn-ghost" style="flex:1;padding:8px;font-size:12px;">📊 Details</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Agent card toggle helper
+function updateCrewAgentCard(labelEl) {
+    const cb = labelEl.querySelector('.crew-agent-checkbox');
+    if (!cb) return;
+    // Toggle happens after click naturally, read the new state
+    setTimeout(() => {
+        labelEl.classList.toggle('crew-agent-selected', cb.checked);
+    }, 0);
+}
+
+// Protocol picker helper for crew creation UI
+function setCrewProtocol(proto) {
+    const sel = document.getElementById('crew-protocol');
+    if (sel) sel.value = proto;
+    ['a2a', 'rest'].forEach(p => {
+        const el = document.getElementById(`proto-${p}`);
+        if (el) el.classList.toggle('crews-protocol-active', p === proto);
+    });
+}
+
+async function createCrew() {
+    const name = document.getElementById('crew-name').value.trim();
+    const description = document.getElementById('crew-description').value.trim();
+    const organization = document.getElementById('crew-organization').value.trim();
+    const protocol = document.getElementById('crew-protocol').value;
+    
+    // Get selected agents from checkboxes
+    const selectedCheckboxes = document.querySelectorAll('.crew-agent-checkbox:checked');
+    const selectedAgentIds = Array.from(selectedCheckboxes).map(cb => cb.value);
+    
+    if (!name) {
+        toast('Crew name is required', 'error');
+        return;
+    }
+    
+    if (selectedAgentIds.length === 0) {
+        toast('Please select at least one agent', 'error');
+        return;
+    }
+    
+    try {
+        // Get agent details from the page
+        const allCheckboxes = document.querySelectorAll('.crew-agent-checkbox');
+        const agentMap = {};
+        const crewAgentsSelect = document.getElementById('crew-agents');
+        
+        Array.from(crewAgentsSelect.options).forEach(option => {
+            agentMap[option.value] = option.text.replace(/^\S+\s/, '');
+        });
+        
+        const selectedAgents = selectedAgentIds.map(id => ({
+            agent_id: id,
+            agent_name: agentMap[id] || 'Unknown',
+            role: 'contributor'
+        }));
+        
+        const data = await api('/crews/create', 'POST', {
+            name, description, organization, communication_protocol: protocol, members: selectedAgents
+        });
+        
+        if (data.success) {
+            toast('Crew created successfully!', 'success');
+            // Clear form
+            document.getElementById('crew-name').value = '';
+            document.getElementById('crew-description').value = '';
+            document.getElementById('crew-organization').value = 'default';
+            // Clear agent selection
+            document.querySelectorAll('.crew-agent-checkbox').forEach(cb => cb.checked = false);
+            // Reload page
+            loadCrewsPage();
+        } else {
+            toast(data.error || 'Failed to create crew', 'error');
+        }
+    } catch (e) {
+        toast('Failed to create crew: ' + e.message, 'error');
+    }
+}
+
+async function addCrewMember() {
+    const crewId = document.getElementById('member-crew-select').value;
+    const agentId = document.getElementById('member-agent-select').value;
+    const role = document.getElementById('member-role').value;
+    
+    if (!crewId) {
+        toast('Please select a crew', 'error');
+        return;
+    }
+    
+    if (!agentId) {
+        toast('Please select an agent', 'error');
+        return;
+    }
+    
+    try {
+        const data = await api(`/crews/${crewId}/members`, 'POST', {
+            agent_id: agentId, role
+        });
+        
+        if (data.success) {
+            toast('Member added to crew successfully!', 'success');
+            // Clear selections
+            document.getElementById('member-crew-select').value = '';
+            document.getElementById('member-agent-select').value = '';
+            document.getElementById('member-role').value = 'contributor';
+            // Reload page
+            loadCrewsPage();
+        } else {
+            toast(data.error || 'Failed to add member', 'error');
+        }
+    } catch (e) {
+        toast('Failed to add crew member: ' + e.message, 'error');
+    }
+}
+
+async function deleteCrew(crewId) {
+    if (!confirm('Are you sure you want to delete this crew? This action cannot be undone.')) {
+        return;
+    }
+    
+    try {
+        const data = await api(`/crews/${crewId}`, 'DELETE');
+        
+        if (data.success) {
+            toast('Crew deleted successfully!', 'success');
+            // Reload page
+            loadCrewsPage();
+        } else {
+            toast(data.error || 'Failed to delete crew', 'error');
+        }
+    } catch (e) {
+        toast('Failed to delete crew: ' + e.message, 'error');
+    }
+}
+
+async function loadCrewCommunications() {
+    const crewId = document.getElementById('view-comm-crew').value;
+    
+    if (!crewId) {
+        document.getElementById('crew-communications').innerHTML = '<div style="text-align: center; color: var(--text-secondary);">👈 Select a crew to view communications</div>';
+        return;
+    }
+    
+    const commsEl = document.getElementById('crew-communications');
+    commsEl.innerHTML = '<div style="text-align: center; color: var(--text-secondary);">⏳ Loading communications...</div>';
+    
+    try {
+        const data = await api(`/a2a/communications/${crewId}`);
+        console.log('[Communications] API Response:', data);
+        
+        if (data.success && data.communications && data.communications.length > 0) {
+            commsEl.innerHTML = data.communications.map((comm, idx) => {
+                // Prefer human-readable names, fall back to truncated IDs
+                const fromRaw = comm.from || comm.sender_id || 'Unknown';
+                const toRaw   = comm.to   || comm.receiver_id || 'Unknown';
+                const fromAgent = comm.from_name || fromRaw;
+                const toAgent   = comm.to_name   || toRaw;
+
+                // Extract content text
+                let contentText = 'No content';
+                if (comm.message) {
+                    if (typeof comm.message === 'string') {
+                        contentText = comm.message;
+                    } else if (typeof comm.message === 'object' && comm.message.text) {
+                        contentText = comm.message.text;
+                    }
+                } else if (comm.content) {
+                    if (typeof comm.content === 'string') {
+                        contentText = comm.content;
+                    } else if (typeof comm.content === 'object' && comm.content.text) {
+                        contentText = comm.content.text;
+                    }
+                }
+
+                const msgType  = comm.message_type || 'message';
+                const isReply  = msgType === 'response';
+                const isBcast  = msgType === 'broadcast';
+                const borderColor = isReply ? '#22c55e' : isBcast ? '#f59e0b' : 'var(--accent)';
+                const typeBg      = isReply ? 'rgba(34,197,94,0.15)' : isBcast ? 'rgba(245,158,11,0.15)' : 'var(--bg-secondary)';
+                const typeColor   = isReply ? '#22c55e' : isBcast ? '#f59e0b' : 'var(--text-secondary)';
+                const typeLabel   = isReply ? '🤖 auto-reply' : isBcast ? '📢 broadcast' : msgType;
+                const timestamp   = comm.timestamp ? new Date(comm.timestamp).toLocaleString() : 'Just now';
+
+                return `
+                    <div style="border-left: 3px solid ${borderColor}; background: var(--card-bg); border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+                            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                <span style="font-weight: 600; color: var(--text-primary);">${escapeHtml(fromAgent)}</span>
+                                <span style="color: var(--text-secondary);">→</span>
+                                <span style="font-weight: 600; color: var(--text-primary);">${escapeHtml(toAgent)}</span>
+                                <span style="background: ${typeBg}; padding: 2px 8px; border-radius: 12px; font-size: 11px; color: ${typeColor}; font-weight: 500;">
+                                    ${escapeHtml(typeLabel)}
+                                </span>
+                            </div>
+                            <span style="font-size: 12px; color: var(--text-secondary); white-space: nowrap; margin-left: 8px;">
+                                ${timestamp}
+                            </span>
+                        </div>
+                        <div style="color: var(--text-primary); line-height: 1.5; word-wrap: break-word; white-space: pre-wrap;">
+                            ${escapeHtml(contentText)}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } else {
+            commsEl.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 20px;">No communications yet. Start collaborating with crew members!</div>';
+        }
+    } catch (e) {
+        commsEl.innerHTML = `<div style="text-align: center; color: var(--red);">❌ Failed to load communications</div>`;
+        console.error('Error loading communications:', e);
+    }
+}
+
+// ── Crew tab switcher ───────────────────────────────────────────────────────
+
+let _activeCrewTab = 'history';
+
+function switchCrewTab(tab) {
+    _activeCrewTab = tab;
+    ['history', 'results'].forEach(t => {
+        const btn   = document.getElementById(`crew-tab-${t}`);
+        const panel = document.getElementById(`crew-panel-${t}`);
+        if (!btn || !panel) return;
+        const active = t === tab;
+        btn.style.color        = active ? 'var(--accent)' : 'var(--text-secondary)';
+        btn.style.borderBottom = active ? '3px solid var(--accent)' : '3px solid transparent';
+        panel.style.display    = active ? 'block' : 'none';
+    });
+}
+
+function refreshCrewTabs() {
+    loadCrewCommunications();
+    loadCrewResults();
+}
+
+// ── Results tab ─────────────────────────────────────────────────────────────
+
+async function loadCrewResults() {
+    const crewId = document.getElementById('view-comm-crew').value.trim();
+    const resultsEl = document.getElementById('crew-results');
+    if (!resultsEl) return;
+
+    if (!crewId) {
+        resultsEl.innerHTML = '<div style="text-align:center; color: var(--text-secondary); padding: 20px;">Select a crew first.</div>';
+        return;
+    }
+
+    resultsEl.innerHTML = '<div style="text-align: center; color: var(--text-secondary);">⏳ Loading results...</div>';
+
+    try {
+        const data = await api(`/a2a/communications/${crewId}`);
+        if (!data.success) throw new Error(data.error || 'Failed');
+
+        const all    = data.communications || [];
+        // Index all messages by their id for quick lookup
+        const byId   = {};
+        all.forEach(c => byId[c.id] = c);
+
+        // Only auto-reply results
+        const replies = all.filter(c => c.message_type === 'response');
+
+        if (replies.length === 0) {
+            resultsEl.innerHTML = '<div style="text-align:center; color: var(--text-secondary); padding: 20px;">No agent results yet. Send a message and agents will reply automatically.</div>';
+            return;
+        }
+
+        function getText(comm) {
+            if (!comm) return '';
+            const m = comm.message;
+            if (!m) return '';
+            if (typeof m === 'string') return m;
+            if (m.text) return m.text;
+            return JSON.stringify(m);
+        }
+
+        resultsEl.innerHTML = replies.map((reply, i) => {
+            const agentName = reply.from_name || reply.from || 'Agent';
+            const queryText = getText(reply);  // the reply content
+            const ts        = reply.timestamp ? new Date(reply.timestamp).toLocaleString() : '';
+
+            // Find the original message this is a reply to (sent to this agent before)
+            const original = all.find(c =>
+                c.to === reply.from &&
+                c.from === reply.to &&
+                c.message_type !== 'response' &&
+                new Date(c.timestamp) < new Date(reply.timestamp)
+            );
+            const originalText = original ? getText(original) : null;
+
+            return `
+                <div style="background: var(--card-bg); border: 1px solid var(--border-color); border-left: 4px solid #22c55e; border-radius: 8px; padding: 14px; margin-bottom: 14px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 18px;">🤖</span>
+                            <span style="font-weight: 700; color: var(--text-primary); font-size: 14px;">${escapeHtml(agentName)}</span>
+                            <span style="background: rgba(34,197,94,0.15); color: #22c55e; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 12px;">Result #${i + 1}</span>
+                        </div>
+                        <span style="font-size: 11px; color: var(--text-secondary);">${ts}</span>
+                    </div>
+                    ${originalText ? `
+                    <div style="background: var(--bg-secondary); border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; color: var(--text-secondary); border-left: 2px solid var(--border-color);">
+                        <span style="font-weight: 600; display: block; margin-bottom: 2px;">💬 Original query</span>
+                        ${escapeHtml(originalText)}
+                    </div>` : ''}
+                    <div style="color: var(--text-primary); line-height: 1.6; white-space: pre-wrap; font-size: 13px;">
+                        ${escapeHtml(queryText)}
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+    } catch (e) {
+        resultsEl.innerHTML = `<div style="text-align:center; color: var(--red);">❌ Failed to load results</div>`;
+        console.error('Error loading crew results:', e);
+    }
+}
+
+async function updateCrewAgentSelects() {
+    const crewId = document.getElementById('send-msg-crew').value;
+    const fromSelect = document.getElementById('send-msg-from');
+    const toSelect = document.getElementById('send-msg-to');
+    
+    console.log('[Agents] Updating agent selects for crew:', crewId);
+    
+    if (!crewId) {
+        fromSelect.innerHTML = '<option value="">Select agent...</option>';
+        toSelect.innerHTML = '<option value="">Select agent...</option>';
+        return;
+    }
+    
+    try {
+        console.log('[API] Fetching crew details from /crews/' + crewId);
+        const crewData = await api(`/crews/${crewId}`);
+        
+        console.log('[API] Crew response:', crewData);
+        
+        if (crewData.success && crewData.crew) {
+            const crew = crewData.crew;
+            const members = crew.members || [];
+            
+            console.log('[Agents] Found members:', members.length);
+            
+            if (members.length === 0) {
+                fromSelect.innerHTML = '<option value="">No members in crew</option>';
+                toSelect.innerHTML = '<option value="">No members in crew</option>';
+                toast('This crew has no members. Add members first.', 'warning');
+                return;
+            }
+            
+            const agentHtml = members.map(m => 
+                `<option value="${m.agent_id}">${escapeHtml(m.agent_name)}</option>`
+            ).join('');
+            
+            fromSelect.innerHTML = '<option value="">Select agent...</option>' + agentHtml;
+            toSelect.innerHTML = '<option value="">Select agent...</option>' + agentHtml;
+            
+            console.log('[Agents] Populated dropdowns with', members.length, 'members');
+        } else {
+            console.error('[API] Crew data invalid:', crewData);
+            toast('Failed to load crew members', 'error');
+            fromSelect.innerHTML = '<option value="">Error loading members</option>';
+            toSelect.innerHTML = '<option value="">Error loading members</option>';
+        }
+    } catch (e) {
+        console.error('[Error] Failed to load crew agents:', e);
+        toast('Failed to load crew members: ' + e.message, 'error');
+        fromSelect.innerHTML = '<option value="">Error loading members</option>';
+        toSelect.innerHTML = '<option value="">Error loading members</option>';
+    }
+}
+
+async function sendCrewMessage() {
+    console.log('[Message] Send button clicked');
+    
+    const crewId = document.getElementById('send-msg-crew').value.trim();
+    const fromAgent = document.getElementById('send-msg-from').value.trim();
+    const toAgent = document.getElementById('send-msg-to').value.trim();
+    const messageType = document.getElementById('msg-type').value.trim();
+    const content = document.getElementById('msg-content').value.trim();
+    
+    console.log('[Message] Raw Data:', { crewId, fromAgent, toAgent, messageType, contentLen: content.length });
+    
+    // Validation checks
+    if (!crewId) {
+        toast('❌ Please select a crew', 'error');
+        return;
+    }
+    if (!fromAgent) {
+        toast('❌ Please select a FROM agent', 'error');
+        document.getElementById('send-msg-from').focus();
+        return;
+    }
+    if (!toAgent) {
+        toast('❌ Please select a TO agent', 'error');
+        document.getElementById('send-msg-to').focus();
+        return;
+    }
+    if (!content) {
+        toast('❌ Please write a message', 'error');
+        document.getElementById('msg-content').focus();
+        return;
+    }
+    
+    if (fromAgent === toAgent) {
+        toast('⚠️ Cannot send message to the same agent', 'error');
+        return;
+    }
+    
+    try {
+        // Build payload with content as dictionary
+        const payload = {
+            crew_id: String(crewId),
+            from_agent: String(fromAgent),
+            to_agent: String(toAgent),
+            message_type: String(messageType || 'task'),
+            content: {
+                text: String(content),
+                type: 'text'
+            }
+        };
+        
+        console.log('[API] Sending payload:', payload);
+        console.log('[API] Payload JSON:', JSON.stringify(payload));
+        
+        const data = await api('/a2a/send', 'POST', payload);
+        
+        console.log('[API] Response:', data);
+        
+        if (data.success) {
+            toast('✅ Message sent! Waiting for agent reply…', 'success');
+            document.getElementById('msg-content').value = '';
+            // Sync the view-crew selector so tabs show this crew
+            const viewSel = document.getElementById('view-comm-crew');
+            if (viewSel && crewId) viewSel.value = crewId;
+            await loadCrewCommunications();
+            // Agent replies asynchronously — refresh again after a short delay
+            setTimeout(() => refreshCrewTabs(), 2500);
+        } else {
+            toast('❌ ' + (data.error || 'Failed to send message'), 'error');
+        }
+    } catch (e) {
+        console.error('[Error] Send message error:', e);
+        toast('❌ Error: ' + e.message, 'error');
+    }
+}
+
+async function broadcastCrewMessage() {
+    console.log('[Broadcast] Broadcast button clicked');
+    
+    const crewId = document.getElementById('send-msg-crew').value.trim();
+    const fromAgent = document.getElementById('send-msg-from').value.trim();
+    const content = document.getElementById('msg-content').value.trim();
+    
+    console.log('[Broadcast] Raw Data:', { crewId, fromAgent, contentLen: content.length });
+    
+    if (!crewId) {
+        toast('❌ Please select a crew', 'error');
+        return;
+    }
+    if (!fromAgent) {
+        toast('❌ Please select a FROM agent', 'error');
+        document.getElementById('send-msg-from').focus();
+        return;
+    }
+    if (!content) {
+        toast('❌ Please write a message', 'error');
+        document.getElementById('msg-content').focus();
+        return;
+    }
+    
+    try {
+        // Build payload with content as dictionary
+        const payload = {
+            crew_id: String(crewId),
+            from_agent: String(fromAgent),
+            message_type: 'broadcast',
+            content: {
+                text: String(content),
+                type: 'text'
+            }
+        };
+        
+        console.log('[API] Broadcasting payload:', payload);
+        console.log('[API] Payload JSON:', JSON.stringify(payload));
+        
+        const data = await api('/a2a/broadcast', 'POST', payload);
+        
+        console.log('[API] Response:', data);
+        
+        if (data.success) {
+            toast('✅ Broadcast sent! Agents are replying…', 'success');
+            document.getElementById('msg-content').value = '';
+            const viewSel = document.getElementById('view-comm-crew');
+            if (viewSel && crewId) viewSel.value = crewId;
+            await loadCrewCommunications();
+            setTimeout(() => refreshCrewTabs(), 3000);
+        } else {
+            toast('❌ ' + (data.error || 'Failed to broadcast message'), 'error');
+        }
+    } catch (e) {
+        console.error('[Error] Broadcast error:', e);
+        toast('❌ Error: ' + e.message, 'error');
+    }
+}

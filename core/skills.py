@@ -8,8 +8,13 @@ import json
 import time
 import traceback
 import httpx
+from pathlib import Path
 from typing import Callable, Dict, Any, List, Optional
 from dataclasses import dataclass, field
+
+# Directory for agent-created files
+FILES_DIR = Path(__file__).parent.parent / "data" / "files"
+FILES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass
@@ -43,6 +48,23 @@ class Skill:
             return SkillResult(
                 success=True, 
                 output=output,
+                execution_time=time.time() - start
+            )
+        except TypeError as te:
+            # Handle parameter mismatches for custom skills
+            if "unexpected keyword argument" in str(te) and self.is_custom:
+                import inspect
+                try:
+                    sig = inspect.signature(self.handler)
+                    filtered = {k: v for k, v in kwargs.items() if k in sig.parameters}
+                    output = self.handler(**filtered)
+                    return SkillResult(success=True, output=output, execution_time=time.time() - start)
+                except:
+                    pass
+            return SkillResult(
+                success=False,
+                output=None,
+                error=f"{type(te).__name__}: {str(te)}\n{traceback.format_exc()}",
                 execution_time=time.time() - start
             )
         except Exception as e:
@@ -175,17 +197,30 @@ def _skill_file_read(path: str) -> str:
 
 
 def _skill_file_write(path: str, content: str, mode: str = "w") -> str:
-    """Write content to a file."""
+    """Write content to a file. Relative paths are saved to data/files/."""
     from pathlib import Path
+    
     p = Path(path)
+    
+    # If path is relative (not absolute), save to data/files/
+    if not p.is_absolute():
+        p = FILES_DIR / path
+    
+    # Create parent directories if needed
     p.parent.mkdir(parents=True, exist_ok=True)
     
     try:
         with open(p, mode, encoding="utf-8") as f:
             f.write(content)
-        return f"Successfully wrote {len(content)} characters to {path}"
+        
+        # Return relative path from project root for user-friendly display
+        try:
+            rel_path = p.relative_to(Path(__file__).parent.parent)
+            return f"✅ Successfully wrote {len(content)} characters to {rel_path}"
+        except ValueError:
+            return f"✅ Successfully wrote {len(content)} characters to {p}"
     except Exception as e:
-        return f"Could not write file: {e}"
+        return f"❌ Could not write file: {e}"
 
 
 def _skill_api_call(url: str, method: str = "GET", headers: Dict = None, 
@@ -285,7 +320,10 @@ class SkillRegistry:
     
     def __init__(self):
         self._skills: Dict[str, Skill] = {}
+        self.skills_dir = Path(__file__).parent.parent / "data" / "skills"
+        self.skills_dir.mkdir(parents=True, exist_ok=True)
         self._register_builtin_skills()
+        self._load_custom_skills()  # Load persisted custom skills
     
     def _register_builtin_skills(self):
         builtins = [
@@ -427,9 +465,71 @@ class SkillRegistry:
         for skill in builtins:
             self._skills[skill.name] = skill
     
+    def _load_custom_skills(self):
+        """Load persisted custom skills from disk."""
+        try:
+            for skill_file in self.skills_dir.glob("*.json"):
+                try:
+                    with open(skill_file) as f:
+                        data = json.load(f)
+                    # Recreate skill from persisted data
+                    skill = Skill(
+                        name=data["name"],
+                        description=data["description"],
+                        parameters=data.get("parameters", {}),
+                        handler=self._create_handler_from_code(data["handler_code"]),
+                        category=data.get("category", "custom"),
+                        is_custom=True,
+                        handler_code=data["handler_code"]
+                    )
+                    self._skills[skill.name] = skill
+                except Exception as e:
+                    import logging
+                    logging.warning(f"Failed to load skill from {skill_file}: {e}")
+        except Exception as e:
+            import logging
+            logging.warning(f"Error loading custom skills: {e}")
+    
+    def _create_handler_from_code(self, handler_code: str) -> Callable:
+        """Create a handler function from Python code."""
+        namespace: Dict[str, Any] = {}
+        exec(handler_code, namespace)
+        return namespace.get("handler")
+    
+    def _save_skill(self, skill: Skill):
+        """Save a custom skill to disk."""
+        if not skill.is_custom or not skill.handler_code:
+            return
+        try:
+            skill_file = self.skills_dir / f"{skill.name}.json"
+            data = {
+                "name": skill.name,
+                "description": skill.description,
+                "parameters": skill.parameters,
+                "handler_code": skill.handler_code,
+                "category": skill.category
+            }
+            with open(skill_file, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to save skill {skill.name}: {e}")
+    
+    def _delete_skill_file(self, skill_name: str):
+        """Delete a saved skill file from disk."""
+        try:
+            skill_file = self.skills_dir / f"{skill_name}.json"
+            if skill_file.exists():
+                skill_file.unlink()
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to delete skill file {skill_name}: {e}")
+    
     def register(self, skill: Skill):
-        """Register a custom skill."""
+        """Register a custom skill and persist if custom."""
         self._skills[skill.name] = skill
+        if skill.is_custom:
+            self._save_skill(skill)
     
     def register_function(self, name: str, description: str, parameters: Dict, 
                           handler: Callable, category: str = "custom") -> Skill:
@@ -473,9 +573,13 @@ class SkillRegistry:
         return skill
     
     def unregister(self, name: str) -> bool:
-        """Remove a skill from the registry. Returns True if removed."""
+        """Remove a skill from the registry and disk. Returns True if removed."""
         if name in self._skills:
+            skill = self._skills[name]
             del self._skills[name]
+            # Delete persisted file if it's a custom skill
+            if skill.is_custom:
+                self._delete_skill_file(name)
             return True
         return False
     

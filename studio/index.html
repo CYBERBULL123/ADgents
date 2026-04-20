@@ -11,13 +11,32 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="/studio/style.css" />
     <!-- Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 </head>
 
 <body>
+    <!-- Loading Overlay -->
+    <div id="app-loading-overlay" style="position: fixed; inset: 0; background: rgba(6, 8, 17, 0.95); z-index: 10000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(6px);">
+        <div style="text-align: center; color: #e0e0e0; font-family: 'Inter', sans-serif;">
+            <div style="font-size: 3rem; margin-bottom: 1.5rem; animation: pulse 1.5s ease-in-out infinite;">⚡</div>
+            <div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 0.5rem;">ADgents Studio</div>
+            <div style="color: #8b8ba8; margin-bottom: 1.5rem;">Initializing application...</div>
+            <div style="width: 200px; height: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; overflow: hidden;">
+                <div style="width: 30%; height: 100%; background: linear-gradient(90deg, #7c3aed, #2563eb); animation: slide 1.5s ease-in-out infinite;"></div>
+            </div>
+            <div style="margin-top: 1.5rem; font-size: 0.85rem; color: #4f4f6e;">
+                <div id="loading-status">Connecting to API...</div>
+            </div>
+        </div>
+        <style>
+            @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+            @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
+        </style>
+    </div>
+
     <!-- Animated background -->
     <div class="bg-grid"></div>
     <div class="bg-glow bg-glow-1"></div>
@@ -74,6 +93,20 @@
         <a class="nav-item" data-page="skills" onclick="navigate('skills');closeSidebar()">
             <span class="nav-icon">🛠️</span>
             <span>Skills</span>
+        </a>
+        <a class="nav-item" data-page="mcp" onclick="navigate('mcp');closeSidebar()">
+            <span class="nav-icon">🔗</span>
+            <span>MCP Server</span>
+        </a>
+
+        <a class="nav-item" data-page="crews" onclick="navigate('crews');closeSidebar()">
+            <span class="nav-icon">👥</span>
+            <span>Crew Collaboration</span>
+        </a>
+        <a class="nav-item" data-page="files" onclick="navigate('files');closeSidebar()">
+            <span class="nav-icon">📁</span>
+            <span>Files</span>
+            <span class="nav-badge" id="files-count-badge" style="display:none">0</span>
         </a>
 
         <div class="sidebar-section-label">Settings</div>
@@ -193,20 +226,29 @@
                         </div>
                         <div class="status-list" id="system-status-list">
                             <div class="status-item">
-                                <span class="status-name">API Server</span>
+                                <span class="status-name">🔴 API Server</span>
                                 <span class="badge badge-green" id="status-api">Connecting...</span>
                             </div>
                             <div class="status-item">
-                                <span class="status-name">LLM Providers</span>
-                                <span class="badge badge-blue" id="status-llm">—</span>
+                                <span class="status-name">🧠 Memory Database</span>
+                                <span class="badge badge-green" id="status-db">SQLite Ready</span>
                             </div>
                             <div class="status-item">
-                                <span class="status-name">Memory DB</span>
-                                <span class="badge badge-green">SQLite Ready</span>
+                                <span class="status-name">⚙️ Skills Engine</span>
+                                <span class="badge badge-green" id="status-skills-engine">Active</span>
                             </div>
                             <div class="status-item">
-                                <span class="status-name">Skills Engine</span>
-                                <span class="badge badge-green">Active</span>
+                                <span class="status-name">🌐 LLM Providers</span>
+                                <span class="badge badge-blue" id="status-llm">Loading...</span>
+                            </div>
+                        </div>
+
+                        <div class="card" style="margin-top:1.5rem; background: var(--bg-card); border: 1px solid var(--border);">
+                            <div class="card-header">
+                                <h3>LLM Provider Details</h3>
+                            </div>
+                            <div class="llm-status-list" id="llm-status-details" style="font-size: 0.85rem; line-height: 1.6;">
+                                <div class="status-item">Loading provider information...</div>
                             </div>
                         </div>
 
@@ -222,6 +264,10 @@
 
             <!-- ── AGENTS ── -->
             <section class="page" id="page-agents">
+                <div style="margin-bottom: 1.5rem;">
+                    <h2 style="margin: 0 0 0.5rem 0; color: var(--text-primary);">Your Agents</h2>
+                    <p style="margin: 0; font-size: 0.9rem; color: var(--text-secondary);">Manage and organize all your AI agents</p>
+                </div>
                 <div class="agents-toolbar">
                     <input type="text" class="search-input" placeholder="🔍 Search agents..." id="agent-search"
                         oninput="filterAgents(this.value)" />
@@ -393,32 +439,41 @@
             <!-- ── TASKS ── -->
             <section class="page" id="page-tasks">
 
-                <!-- Control bar -->
-                <div class="task-control-bar">
-                    <div class="task-agent-group">
-                        <label class="task-label">Agent</label>
-                        <select id="task-agent-select" class="task-select">
-                            <option value="">— Select Agent —</option>
-                        </select>
-                    </div>
+                <!-- Task Execution Controls -->
+                <div style="margin-bottom: 1.5rem;">
+                    <h3 style="margin: 0 0 1rem 0; color: var(--text-primary);">Execute Agent Tasks</h3>
 
-                    <div class="task-input-group">
-                        <label class="task-label">Task Description</label>
-                        <textarea id="task-description" class="task-textarea"
-                            placeholder="Describe the task — e.g. Research the latest AI trends and write a summary report"
-                            rows="3"></textarea>
-                    </div>
-
-                    <div class="task-options-group">
-                        <div class="task-iter-row">
-                            <label class="task-label">Iterations: <strong id="max-iter-val">10</strong></label>
-                            <input type="range" id="task-max-iter" min="3" max="20" value="10"
-                                oninput="document.getElementById('max-iter-val').textContent=this.value" />
-                            <div class="task-iter-marks"><span>3</span><span>20</span></div>
+                    <div class="task-control-bar">
+                        <div class="task-agent-group">
+                            <label class="task-label">Select Agent</label>
+                            <select id="task-agent-select" class="task-select">
+                                <option value="">— Choose an Agent —</option>
+                            </select>
                         </div>
-                        <button class="btn btn-primary task-run-btn" onclick="startTask()">
-                            ⚡ Run Autonomous Task
-                        </button>
+
+                        <div class="task-input-group">
+                            <label class="task-label">Task Description</label>
+                            <textarea id="task-description" class="task-textarea"
+                                placeholder="Describe the task — e.g. Research the latest AI trends and write a summary report"
+                                rows="3"></textarea>
+                        </div>
+
+                        <div class="task-options-group">
+                            <div class="task-iter-row">
+                                <label class="task-label">Iterations: <strong id="max-iter-val">10</strong></label>
+                                <input type="range" id="task-max-iter" min="3" max="20" value="10"
+                                    oninput="document.getElementById('max-iter-val').textContent=this.value" />
+                                <div class="task-iter-marks"><span>3</span><span>20</span></div>
+                            </div>
+                            <button class="btn btn-primary task-run-btn" onclick="startTask()">
+                                ⚡ Run Task
+                            </button>
+                        </div>
+                    </div>
+                    <div style="padding: 1rem; background: rgba(59, 130, 246, 0.1); border-left: 3px solid #3b82f6; border-radius: 4px; margin-top: 1rem;">
+                        <div style="font-size: 0.85rem; color: var(--text-secondary);">
+                            <strong>Autonomous Task Execution:</strong> The selected agent will execute the task using ReAct reasoning with autonomous decision-making.
+                        </div>
                     </div>
                 </div>
 
@@ -438,8 +493,7 @@
                         <div class="task-empty-state">
                             <div class="task-empty-icon">⚡</div>
                             <div class="task-empty-title">Ready for Tasks</div>
-                            <div class="task-empty-desc">Select an agent, describe the task, then hit Run.<br>You'll see
-                                the agent's thoughts and actions here in real-time.</div>
+                            <div class="task-empty-desc">Choose an agent, describe the task, then hit Run.<br>You'll see the agent's thoughts and actions here in real-time.</div>
                         </div>
                     </div>
                 </div>
@@ -558,6 +612,22 @@
                 </div>
             </section>
 
+            <!-- ── FILES ── -->
+            <section class="page" id="page-files">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>📁 Files & Data</h3>
+                        <div class="header-actions">
+                            <input type="text" id="files-search" placeholder="🔍 Search files..." oninput="filterFiles(this.value)" />
+                            <button class="btn btn-secondary" onclick="refreshFiles()" title="Refresh file list">🔄 Refresh</button>
+                        </div>
+                    </div>
+                    <div id="files-grid" class="files-grid">
+                        <div class="empty-state-small">Loading files...</div>
+                    </div>
+                </div>
+            </section>
+
             <!-- ── SKILLS ── -->
             <section class="page" id="page-skills">
 
@@ -655,54 +725,197 @@
 
             </section>
 
-            <!-- ── SETTINGS ── -->
-            <section class="page" id="page-settings">
-                <div class="two-col">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3>🤖 LLM Provider</h3>
+            <!-- ── MCP SERVER ── -->
+            <section class="page" id="page-mcp">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">🔗 MCP Server</div>
+                        <div class="page-description">Model Context Protocol for LLM Integration</div>
+                    </div>
+                </div>
+
+                <div class="mcp-layout">
+                    <!-- Top Row: Status + Config -->
+                    <div class="two-col">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>📊 Server Status</h3>
+                            </div>
+                            <div id="mcp-status">
+                                <div class="mcp-loading">Loading...</div>
+                            </div>
+                            <div class="mcp-server-actions">
+                                <button class="btn btn-primary" onclick="startMCPServer()" id="btn-start-mcp">▶️ Start Server</button>
+                                <button class="btn btn-danger" onclick="stopMCPServer()" id="btn-stop-mcp" style="display:none;">⏹️ Stop Server</button>
+                                <button class="btn btn-ghost" onclick="loadMCPPage()">🔄 Refresh</button>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>Provider</label>
-                            <select id="llm-provider" onchange="updateModelHint()">
-                                <option value="openai">OpenAI (GPT-4o)</option>
-                                <option value="gemini">Google Gemini</option>
-                                <option value="claude">✨ Anthropic Claude</option>
-                                <option value="ollama">Ollama (Local)</option>
-                            </select>
+
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>⚙️ Configuration</h3>
+                            </div>
+                            <div class="form-group">
+                                <label for="mcp-mode">Mode</label>
+                                <select id="mcp-mode">
+                                    <option value="stdio">stdio (Claude Desktop)</option>
+                                    <option value="sse">SSE (Web Clients)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="mcp-port">Port (for SSE)</label>
+                                <input type="number" id="mcp-port" value="8001" min="1024" max="65535" />
+                            </div>
+                            <button class="btn btn-primary" onclick="saveMCPConfig()" style="width:100%;margin-top:0.5rem;">💾 Save Config</button>
                         </div>
-                        <div class="form-group">
-                            <label>API Key</label>
-                            <input type="password" id="llm-api-key" placeholder="sk-..." />
-                        </div>
-                        <div class="form-group">
-                            <label>Model</label>
-                            <input type="text" id="llm-model" placeholder="gpt-4o-mini" />
-                        </div>
-                        <button class="btn btn-primary" onclick="saveLLMConfig()">💾 Save & Connect</button>
-                        <div id="llm-config-status" style="margin-top:1rem"></div>
                     </div>
 
-                    <div class="card">
-                        <div class="card-header">
-                            <h3>📡 Provider Status</h3>
+                    <!-- Tools + Agents Row -->
+                    <div class="two-col">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>🔨 Available Skills as MCP Tools</h3>
+                            </div>
+                            <div id="mcp-tools-list" class="mcp-list">
+                                <div class="mcp-loading">Loading...</div>
+                            </div>
                         </div>
-                        <div id="provider-status-list"></div>
 
-                        <div class="card-header" style="margin-top:1.5rem">
-                            <h3>ℹ️ About ADgents</h3>
-                        </div>
-                        <div class="about-info">
-                            <p><strong>ADgents</strong> is an autonomous AI agent platform where each agent has a unique
-                                persona, persistent memory, domain expertise, and real-world skills.</p>
-                            <div class="about-badges">
-                                <span class="badge badge-purple">v1.0.0</span>
-                                <span class="badge badge-blue">Python 3.14</span>
-                                <span class="badge badge-green">FastAPI</span>
-                                <span class="badge badge-orange">Open Source</span>
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>🤖 Available Agents</h3>
+                            </div>
+                            <div id="mcp-agents-list" class="mcp-list">
+                                <div class="mcp-loading">Loading...</div>
                             </div>
                         </div>
                     </div>
+
+                    <!-- Claude Desktop Integration -->
+                    <div class="card mcp-integration-card">
+                        <div class="card-header">
+                            <h3>📋 Claude Desktop Integration</h3>
+                        </div>
+                        <p class="mcp-integration-desc">Add this to your Claude config to access ADgents skills:</p>
+                        <div class="mcp-code-block">
+                            <code>{
+  "mcpServers": {
+    "adgents": {
+      "command": "python",
+      "args": ["-m", "adgents.mcp"]
+    }
+  }
+}</code>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── CREW MANAGER ── -->
+
+            <!-- ── SETTINGS ── -->
+            <section class="page" id="page-settings">
+                <div style="max-width: 800px; margin: 0 auto; padding: 1rem;">
+                    
+                    <!-- LLM Configuration -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>🤖 LLM Configuration</h3>
+                        </div>
+                        
+                        <!-- Current Configuration Display -->
+                        <div style="background: linear-gradient(135deg, rgba(124, 58, 237, 0.1), rgba(37, 99, 235, 0.1)); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1.5rem;">
+                            <div style="font-weight: 600; margin-bottom: 0.75rem;">📊 Current Configuration</div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                <div>
+                                    <div style="color: var(--text-secondary); font-size: 0.85rem;">Provider</div>
+                                    <div id="current-provider-display" style="font-weight: 600; color: var(--accent);">🔴 OpenAI</div>
+                                </div>
+                                <div>
+                                    <div style="color: var(--text-secondary); font-size: 0.85rem;">Model</div>
+                                    <div id="current-model-display" style="font-weight: 600;">gpt-4o-mini</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Configured Providers Status -->
+                        <div style="background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1.5rem;">
+                            <div style="font-weight: 600; margin-bottom: 0.75rem;">✅ Configured Providers</div>
+                            <div id="llm-env-status" style="display: grid; gap: 0.5rem; font-size: 0.9rem;">
+                                <div style="color: var(--text-secondary);">Loading...</div>
+                            </div>
+                        </div>
+
+                        <!-- Provider & Model Selection -->
+                        <div class="form-group">
+                            <label>LLM Provider</label>
+                            <select id="llm-provider" onchange="updateProviderSelection()" class="form-input">
+                                <option value="">-- Select Provider --</option>
+                                <option value="openai">🔴 OpenAI</option>
+                                <option value="gemini">🔵 Google Gemini</option>
+                                <option value="claude">✨ Anthropic Claude</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>API Key <span style="color: var(--text-secondary); font-size: 0.85rem;">(optional - leave blank to use .env)</span></label>
+                            <input type="password" id="llm-api-key" placeholder="Leave blank to use existing .env key" class="form-input" />
+                            <small style="display:block; color:var(--text-secondary); margin-top:0.5rem;">🔒 Only provide if you want to update the API key. Otherwise, the .env file key will be used.</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Model</label>
+                            <input type="text" id="llm-model" placeholder="e.g., gpt-4o, gpt-4o-mini, gemini-2.5-flash, claude-3-5-sonnet-20241022" class="form-input" />
+                            <small id="model-hint" style="display:block; color:var(--text-secondary); margin-top:0.5rem;">Enter any model name - not limited to predefined models</small>
+                        </div>
+
+                        <div style="display:flex; gap:0.75rem; flex-wrap: wrap;">
+                            <button class="btn btn-primary" onclick="saveLLMConfig()">💾 Save Configuration</button>
+                            <button class="btn btn-ghost" onclick="testLLMConnection()">🧪 Test Connection</button>
+                            <button class="btn btn-ghost" onclick="loadCurrentLLMConfig()">🔄 Reload</button>
+                        </div>
+                        <div id="llm-config-status" style="margin-top:1rem; display:none;"></div>
+                    </div>
+
+                    <!-- Personal Settings -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>⚙️ Preferences</h3>
+                        </div>
+                        <div class="form-group">
+                            <label>Organization Name</label>
+                            <input type="text" id="org-name" placeholder="Your organization" class="form-input" />
+                        </div>
+                        <div class="form-group">
+                            <label>Memory Type</label>
+                            <select id="memory-type" class="form-input">
+                                <option value="multi_tier">Multi-Tier (Recommended)</option>
+                                <option value="episodic">Episodic Only</option>
+                                <option value="semantic">Semantic Only</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="auto-save" checked /> Auto-save conversations
+                            </label>
+                        </div>
+                        <button class="btn btn-primary" onclick="savePersonalSettings()">💾 Save</button>
+                        <div id="personal-config-status" style="margin-top:1rem"></div>
+                    </div>
+
+                    <!-- System Info -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>ℹ️ System</h3>
+                        </div>
+                        <div style="display: grid; gap: 0.5rem; font-size: 0.9rem;">
+                            <div><strong>Platform:</strong> ADgents v1.0.0</div>
+                            <div><strong>Framework:</strong> FastAPI + Python 3.10+</div>
+                            <div><strong>License:</strong> Open Source (MIT)</div>
+                            <div><a href="https://github.com/CYBERBULL123/ADgents" target="_blank" style="color: var(--accent);">📚 GitHub Repository</a></div>
+                        </div>
+                    </div>
+
                 </div>
             </section>
 
@@ -721,6 +934,259 @@
                         </div>
                         <div id="docs-content" class="md-content">
                             <div class="empty-state-small" style="text-align:left; padding:0">Loading documentation...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+
+            <!-- ── CREW COLLABORATION ── -->
+            <section class="page" id="page-crews">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">👥 Crew Management</div>
+                        <div class="page-description">Create and manage multi-agent teams for collaborative work</div>
+                    </div>
+                    <button class="btn btn-primary" onclick="document.getElementById('crew-name').focus();document.getElementById('crew-name').scrollIntoView({behavior:'smooth',block:'center'})">
+                        + New Crew
+                    </button>
+                </div>
+
+                <!-- Stats Bar -->
+                <div class="crews-stats-bar">
+                    <div class="crews-stat">
+                        <span class="crews-stat-icon">👥</span>
+                        <div>
+                            <div class="crews-stat-value" id="stat-crew-count">0</div>
+                            <div class="crews-stat-label">Total Crews</div>
+                        </div>
+                    </div>
+                    <div class="crews-stat-divider"></div>
+                    <div class="crews-stat">
+                        <span class="crews-stat-icon">🤖</span>
+                        <div>
+                            <div class="crews-stat-value" id="stat-member-count">0</div>
+                            <div class="crews-stat-label">Total Members</div>
+                        </div>
+                    </div>
+                    <div class="crews-stat-divider"></div>
+                    <div class="crews-stat">
+                        <span class="crews-stat-icon">🔗</span>
+                        <div>
+                            <div class="crews-stat-value">A2A</div>
+                            <div class="crews-stat-label">Default Protocol</div>
+                        </div>
+                    </div>
+                    <div class="crews-stat-divider"></div>
+                    <div class="crews-stat">
+                        <span class="crews-stat-icon" style="color:var(--green);">●</span>
+                        <div>
+                            <div class="crews-stat-value" style="color:var(--green);">Online</div>
+                            <div class="crews-stat-label">System Status</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Main Two-Column Grid -->
+                <div class="crews-main-grid">
+                    <!-- Left: Create Crew -->
+                    <div class="card crews-create-panel">
+                        <div class="card-header">
+                            <div style="display:flex;align-items:center;gap:10px;">
+                                <div class="crews-section-icon">✨</div>
+                                <div>
+                                    <h3 style="margin:0;font-size:15px;font-weight:700;">Create New Crew</h3>
+                                    <p style="margin:2px 0 0;font-size:12px;color:var(--text-secondary);">Set up a multi-agent team</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="crews-form-grid">
+                            <div class="form-group">
+                                <label for="crew-name">Crew Name *</label>
+                                <input type="text" id="crew-name" placeholder="e.g., ResearchTeam">
+                            </div>
+                            <div class="form-group">
+                                <label for="crew-organization">Organization</label>
+                                <input type="text" id="crew-organization" value="default">
+                            </div>
+                        </div>
+
+                        <!-- Protocol Picker -->
+                        <div class="form-group" style="margin-bottom:16px;">
+                            <label>Protocol</label>
+                            <div class="crews-protocol-row">
+                                <label class="crews-protocol-option crews-protocol-active" id="proto-a2a" onclick="setCrewProtocol('a2a')">
+                                    <span>🔗</span>
+                                    <span class="crews-proto-name">Agent-to-Agent</span>
+                                    <span class="crews-proto-badge">A2A</span>
+                                </label>
+                                <label class="crews-protocol-option" id="proto-rest" onclick="setCrewProtocol('rest')">
+                                    <span>🌐</span>
+                                    <span class="crews-proto-name">REST API</span>
+                                    <span class="crews-proto-badge">REST</span>
+                                </label>
+                            </div>
+                            <select id="crew-protocol" style="display:none;">
+                                <option value="a2a">Agent-to-Agent (A2A)</option>
+                                <option value="rest">REST API</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" style="margin-bottom:20px;">
+                            <label for="crew-description">Description</label>
+                            <textarea id="crew-description" rows="2" placeholder="Brief description of this crew's purpose" style="resize:vertical;"></textarea>
+                        </div>
+
+                        <!-- Agent Selection -->
+                        <div class="crews-agents-header">
+                            <span style="font-size:13px;font-weight:600;">Select Agents</span>
+                            <span class="crews-selected-pill" id="selected-agents-count">0 selected</span>
+                        </div>
+                        <div id="crew-agents-wrapper" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:18px;max-height:190px;overflow-y:auto;padding-right:2px;">
+                            <select id="crew-agents" multiple style="display:none;"></select>
+                        </div>
+
+                        <button class="btn btn-primary" onclick="createCrew()" style="width:100%;padding:11px;font-size:14px;font-weight:700;border-radius:10px;">
+                            ✨ Create Crew
+                        </button>
+                    </div>
+
+                    <!-- Right: Active Crews -->
+                    <div class="card crews-list-panel">
+                        <div class="card-header">
+                            <div style="display:flex;align-items:center;gap:10px;">
+                                <div class="crews-section-icon crews-icon-blue">👥</div>
+                                <div>
+                                    <h3 style="margin:0;font-size:15px;font-weight:700;">Your Crews</h3>
+                                    <p style="margin:2px 0 0;font-size:12px;color:var(--text-secondary);">Active multi-agent teams</p>
+                                </div>
+                            </div>
+                            <button class="btn btn-ghost" onclick="loadCrews()" style="font-size:12px;padding:6px 10px;" title="Refresh">🔄</button>
+                        </div>
+                        <div id="crews-list" class="crews-list-inner">
+                            <div class="empty-state">
+                                <div class="empty-icon">👥</div>
+                                <div class="empty-title">No Crews Yet</div>
+                                <div class="empty-description">Create your first crew to get started</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Row: Add Member + Communications -->
+                <div class="crews-bottom-grid">
+                    <!-- Add Member -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div style="display:flex;align-items:center;gap:10px;">
+                                <div class="crews-section-icon crews-icon-orange">➕</div>
+                                <div>
+                                    <h3 style="margin:0;font-size:15px;font-weight:700;">Add Member</h3>
+                                    <p style="margin:2px 0 0;font-size:12px;color:var(--text-secondary);">Expand a crew with agents</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="member-crew-select">Crew</label>
+                            <select id="member-crew-select">
+                                <option value="">Choose a crew...</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="member-agent-select">Agent</label>
+                            <select id="member-agent-select">
+                                <option value="">Choose an agent...</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom:18px;">
+                            <label for="member-role">Role</label>
+                            <select id="member-role">
+                                <option value="contributor">Contributor</option>
+                                <option value="leader">Leader</option>
+                                <option value="specialist">Specialist</option>
+                                <option value="coordinator">Coordinator</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" onclick="addCrewMember()" style="width:100%;padding:10px;font-weight:700;">
+                            ➕ Add Member
+                        </button>
+                    </div>
+
+                    <!-- Communications -->
+                    <div class="card">
+                        <div class="card-header">
+                            <div style="display:flex;align-items:center;gap:10px;">
+                                <div class="crews-section-icon crews-icon-purple">💬</div>
+                                <div>
+                                    <h3 style="margin:0;font-size:15px;font-weight:700;">Crew Communications</h3>
+                                    <p style="margin:2px 0 0;font-size:12px;color:var(--text-secondary);">Send & monitor messages between agents</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Send Message -->
+                        <div class="crews-msg-block">
+                            <div class="crews-msg-fields">
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;">Crew</label>
+                                    <select id="send-msg-crew"><option value="">Choose...</option></select>
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;">From</label>
+                                    <select id="send-msg-from"><option value="">Agent...</option></select>
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;">To</label>
+                                    <select id="send-msg-to"><option value="">Agent...</option></select>
+                                </div>
+                                <div class="form-group" style="margin:0;">
+                                    <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;">Type</label>
+                                    <select id="msg-type">
+                                        <option value="task">Task</option>
+                                        <option value="query">Query</option>
+                                        <option value="update">Update</option>
+                                        <option value="request">Request</option>
+                                        <option value="response">Response</option>
+                                        <option value="alert">Alert</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="crews-msg-compose">
+                                <textarea id="msg-content" placeholder="Type a message to send between agents..." rows="2" style="flex:1;resize:vertical;font-size:13px;"></textarea>
+                                <div class="crews-msg-btns">
+                                    <button class="btn btn-primary" onclick="sendCrewMessage()" style="padding:8px 14px;font-size:13px;">📤 Send</button>
+                                    <button class="btn btn-ghost" onclick="broadcastCrewMessage()" style="padding:8px 14px;font-size:13px;">📢 Broadcast</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- View Panel -->
+                        <div class="crews-view-row">
+                            <div class="form-group" style="flex:1;margin:0;">
+                                <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;">View Crew</label>
+                                <select id="view-comm-crew" style="margin-top:4px;" onchange="refreshCrewTabs()">
+                                    <option value="">Choose a crew...</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-ghost" onclick="refreshCrewTabs()" style="padding:8px 14px;font-size:13px;white-space:nowrap;align-self:flex-end;">🔄 Refresh</button>
+                        </div>
+
+                        <!-- Tab Bar -->
+                        <div class="crews-tab-bar">
+                            <button id="crew-tab-history" style="background:none;border:none;border-bottom:3px solid var(--accent);padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;color:var(--accent);outline:none;position:relative;bottom:-2px;">📋 History</button>
+                            <button id="crew-tab-results" style="background:none;border:none;border-bottom:3px solid transparent;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;color:var(--text-secondary);outline:none;position:relative;bottom:-2px;">✅ Results</button>
+                        </div>
+
+                        <div id="crew-panel-history">
+                            <div id="crew-communications" class="crews-panel-body">
+                                <div class="crews-panel-empty">Select a crew and click Refresh.</div>
+                            </div>
+                        </div>
+                        <div id="crew-panel-results" style="display:none;">
+                            <div id="crew-results" class="crews-panel-body">
+                                <div class="crews-panel-empty">Select a crew and click Refresh.</div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -759,7 +1225,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=9"></script>
+    <script src="/studio/app.js?v=9"></script>
 </body>
 
 </html>

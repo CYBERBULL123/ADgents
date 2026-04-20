@@ -24,10 +24,38 @@ ADgents treats AI agents like **real people** — each agent has:
 
 ## 🚀 Quick Start
 
-### 1. Install & Start Server
+### 1. Install ADgents
 
+**Via pip (recommended):**
 ```bash
-pip install -r requirements.txt
+pip install adgents
+```
+
+**From source:**
+```bash
+git clone https://github.com/CYBERBULL123/ADgents.git
+cd ADgents
+pip install -e .
+```
+
+**Set up environment:**
+```bash
+# Create .env file with your LLM provider credentials
+cat > .env << 'EOF'
+# Choose one LLM provider:
+GEMINI_API_KEY=your-key-here
+GEMINI_MODEL=gemini-1.5-flash
+DEFAULT_LLM_PROVIDER=gemini
+
+# For other providers, see docs/packages/installation.md
+# OPENAI_API_KEY=sk-your-key
+# ANTHROPIC_API_KEY=sk-ant-your-key
+# OLLAMA_BASE_URL=http://localhost:11434
+EOF
+```
+
+**Start the server:**
+```bash
 python start.py
 ```
 
@@ -70,6 +98,44 @@ researcher.learn("Our company focuses on B2B SaaS products")
 task = researcher.run_task("Research and summarize GPT-4's capabilities")
 print(task.result)
 ```
+
+---
+
+## 📚 Documentation
+
+Complete documentation organized into clear sections:
+
+### For Package Integration
+Integrate ADgents into your Python projects:
+
+| Guide | Purpose |
+|-------|---------|
+| [**Installation**](docs/packages/installation.md) | Installation methods and setup |
+| [**Quick Integration**](docs/packages/integration.md) | Add agents to your code |
+| [**API Reference**](docs/packages/api_reference.md) | All Python APIs |
+| [**Custom Skills**](docs/packages/skills.md) | ⭐ Create & integrate custom skills |
+| [**Advanced Features**](docs/packages/advanced.md) | Memory, optimization, LLM routing |
+
+**[→ Go to Package Integration Docs](docs/packages/README.md)**
+
+### For Project Application
+Run and manage the ADgents application:
+
+| Guide | Purpose |
+|-------|---------|
+| [**Quickstart**](docs/project/quickstart.md) | Start in 5 minutes |
+| [**Studio UI**](docs/project/studio.md) | Web-based management |
+| [**Deployment**](docs/project/deployment.md) | Production setup |
+| [**Use Cases**](docs/project/use_cases.md) | Real-world examples |
+
+**[→ Go to Project Application Docs](docs/project/README.md)**
+
+### Support & Resources
+
+- 📝 [Examples & Code Samples](EXAMPLES.md)
+- 🤝 [Contributing Guide](CONTRIBUTING.md)  
+- 🆘 [Troubleshooting](TROUBLESHOOTING.md)
+- 🔗 [Full Documentation Index](docs/index.md)
 
 ---
 
@@ -197,22 +263,68 @@ User Task
 - [x] Core agent engine (ReAct loop)
 - [x] Persona system with 5 templates
 - [x] Multi-layer memory (working, episodic, semantic)
-- [x] 10 built-in skills
-- [x] Multi-provider LLM support
+- [x] 10+ built-in skills
+- [x] Multi-provider LLM support (OpenAI, Gemini, Anthropic, Ollama)
 - [x] Web Studio UI
 - [x] REST + WebSocket API
 - [x] Python SDK
 - [x] CLI tool
-- [ ] Multi-agent collaboration (teams)
-- [ ] Custom skill plugins
+- [x] Multi-agent crews and collaboration
+- [x] Complete documentation suite
+- [x] Installation and integration guides
+- [ ] Custom skill plugins marketplace
 - [ ] Vector embeddings for smarter memory search
 - [ ] JavaScript/TypeScript SDK
-- [ ] PyPI package release
-- [ ] Docker deployment
+- [ ] PyPI package official release
+- [ ] Docker deployment templates
 - [ ] Fine-tuning support
+- [ ] Multi-provider embeddings
 
 ---
 
-## 📄 License
+## 🛠️ Building & Publishing
+
+ADgents includes a complete automated build system for creating and publishing pip packages:
+
+### Quick Build
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\build.ps1          # Build the package
+.\scripts\build.ps1 -Publish # Build and publish to PyPI
+```
+
+**Linux/Mac (Bash):**
+```bash
+./scripts/build.sh           # Build the package
+./scripts/build.sh --publish # Build and publish to PyPI
+```
+
+**All Platforms (Makefile):**
+```bash
+make build       # Build package
+make test        # Run tests
+make publish     # Publish to PyPI
+make help        # View all commands
+```
+
+### Automated Release
+
+Simply push a version tag and GitHub Actions automatically:
+- Builds the package on multiple Python versions
+- Runs the test suite
+- Publishes to PyPI
+- Deploys documentation
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+See [RELEASE.md](RELEASE.md) and [BUILD.md](BUILD.md) for detailed documentation.
+
+---
+
+## 📝 License
 
 MIT — Build freely, ship boldly.

@@ -319,6 +319,18 @@ I'll use my available tools to complete this task autonomously."""
                     result: SkillResult = self.skill_registry.execute(skill_name, **skill_args)
                     result_text = result.to_text()
                     
+                    # Track files created during task execution
+                    if skill_name == "file_write" and result.success:
+                        # Extract file path from the result message
+                        # Message format: "✅ Successfully wrote X characters to path/to/file"
+                        import re
+                        match = re.search(r'wrote \d+ characters to (.+)$', str(result.output))
+                        if match:
+                            file_path = match.group(1).strip()
+                            if "files_created" not in agent_task.metadata:
+                                agent_task.metadata["files_created"] = []
+                            agent_task.metadata["files_created"].append(file_path)
+                    
                     action_step.skill_result = result_text
                     agent_task.add_step(action_step)
                     
@@ -449,22 +461,34 @@ I'll use my available tools to complete this task autonomously."""
         return self.persona.id
     
     def stats(self) -> Dict[str, Any]:
+        # Count only skills assigned to this agent, not all available skills
+        all_skills = self.skill_registry.list()
+        assigned_skills = self.persona.skills or [s.name for s in all_skills]
+        assigned_count = len([s.name for s in all_skills if s.name in assigned_skills])
+        
         return {
             "name": self.name,
             "id": self.id,
             "role": self.persona.role,
             "status": self.status.value,
             "memory": self.memory.stats(),
-            "skills": len(self.skill_registry.list()),
+            "skills": assigned_count,
             "llm_providers": self.llm.available_providers()
         }
     
     def to_dict(self) -> Dict:
+        # Return only skills assigned to this agent, not all available skills
+        all_skills = self.skill_registry.list()
+        assigned_skills = self.persona.skills or [s.name for s in all_skills]
+        assigned_skill_names = [s.name for s in all_skills if s.name in assigned_skills]
+        
         return {
+            "id": self.id,
+            "name": self.name,
             "persona": self.persona.to_dict(),
             "status": self.status.value,
             "memory_stats": self.memory.stats(),
-            "available_skills": [s.name for s in self.skill_registry.list()]
+            "available_skills": assigned_skill_names
         }
 
 

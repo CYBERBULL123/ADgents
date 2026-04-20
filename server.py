@@ -5,6 +5,8 @@ REST + WebSocket API for the agent platform.
 import json
 import asyncio
 import uuid
+import logging
+import os
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pathlib import Path
@@ -12,21 +14,60 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Load .env — works with or without python-dotenv installed
+def _load_env_file():
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(env_path)
+        return
+    except ImportError:
+        pass
+    # Fallback: parse .env manually
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, _, val = line.partition('=')
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = val
+
+_load_env_file()
 
 from core.agent import Agent, AgentFactory, AgentTask, ThoughtStep, AGENT_FACTORY
 from core.persona import Persona, PERSONA_TEMPLATES
 from core.skills import SKILL_REGISTRY, Skill
 from core.llm import LLM_ROUTER
 from core.memory import AgentMemory
+from core.memory import AgentMemory
 from core.agent_store import save_agent_persona, load_all_personas, delete_agent_persona
 from core.task_db import save_task, list_tasks, get_task, delete_task, task_stats
-from core.crew import Crew
+from core.a2a_protocol import A2AProtocolManager, get_a2a_manager, A2AMessage
 from core.mcp_server import MCPServer
+from core.crew_manager import get_crew_manager
+
+
+# ─── Logger Setup ─────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+
+# ─── Suppress verbose Pydantic warnings ───────────────────────────────────────
+import warnings
+try:
+    from pydantic import PydanticJsonSchemaWarning
+    warnings.filterwarnings("ignore", category=PydanticJsonSchemaWarning)
+except ImportError:
+    warnings.filterwarnings("ignore", message=".*non-serializable-default.*")
 
 # ─── Pydantic Models ──────────────────────────────────────────────────────────
 
@@ -42,10 +83,6 @@ class TaskRequest(BaseModel):
     task: str
     agent_id: str
     max_iterations: Optional[int] = 10
-
-class CrewRunRequest(BaseModel):
-    task: str
-    agent_ids: List[str]
 
 class LearnRequest(BaseModel):
     agent_id: str
@@ -66,10 +103,48 @@ class RegisterSkillRequest(BaseModel):
     description: str
     category: str = "custom"
     parameters: Dict[str, Any] = {"type": "object", "properties": {}}
-    handler_code: str  # Python code defining a 'handler' function
+    handler_code: str
 
 class GenerateSkillRequest(BaseModel):
     description: str
+
+class MCPConfigRequest(BaseModel):
+    mode: Optional[str] = "stdio"
+    port: Optional[int] = 8001
+
+class CreateTemplateRequest(BaseModel):
+    name: str
+    description: str
+    role: str
+    expertise: List[str] = []
+    skills: List[str] = []
+    instructions: str = ""
+    model: str = "gemini-2.0-flash"
+
+class CreateOrganizationRequest(BaseModel):
+    name: str
+    description: str = ""
+
+class SendA2AMessageRequest(BaseModel):
+    crew_id: str
+    from_agent: str
+    to_agent: str
+    message_type: str
+    content: Dict[str, Any]
+
+class BroadcastA2AMessageRequest(BaseModel):
+    crew_id: str
+    from_agent: str
+    message_type: str = "broadcast"
+    content: Dict[str, Any]
+
+class CreateCrewRequest(BaseModel):
+    name: str
+    description: str = ""
+    organization: str = "default"
+    members: List[Dict[str, Any]] = []
+    communication_protocol: str = "a2a"
+
 
 # ─── App Setup ────────────────────────────────────────────────────────────────
 
@@ -91,6 +166,12 @@ app.add_middleware(
 studio_path = Path(__file__).parent / "studio"
 if studio_path.exists():
     app.mount("/studio", StaticFiles(directory=str(studio_path), html=True), name="studio")
+
+# Serve studio at root path
+@app.get("/")
+async def serve_studio():
+    """Redirect root to studio."""
+    return RedirectResponse(url="/studio/", status_code=302)
 
 # WebSocket connection manager
 class ConnectionManager:
@@ -130,6 +211,56 @@ for _p in load_all_personas():
     agents[_p.id] = Agent(persona=_p)
 
 
+# ─── A2A Auto-Reply Engine ────────────────────────────────────────────────────
+
+async def _agent_auto_reply(
+    crew_id: str,
+    receiver_id: str,
+    sender_id: str,
+    sender_name: str,
+    receiver_name: str,
+    message_text: str,
+):
+    """
+    Background task: the receiving agent reads the message and replies autonomously
+    using the built-in ReAct LLM agent (agent.think).
+    """
+    try:
+        crew_mgr = get_crew_manager()
+
+        receiver_agent = agents.get(receiver_id)
+        if not receiver_agent:
+            logger.info(f"[A2A] Agent {receiver_id} not in registry – skipping auto-reply")
+            return
+
+        context = f"[A2A Message from {sender_name}]: {message_text}"
+
+        response_text = await asyncio.get_event_loop().run_in_executor(
+            None, receiver_agent.think, context
+        )
+
+        if not response_text:
+            return
+
+        await crew_mgr.send_message_between_agents(
+            crew_id=crew_id,
+            from_agent=receiver_id,
+            to_agent=sender_id,
+            message={"text": response_text, "type": "text"},
+            from_name=receiver_name,
+            to_name=sender_name,
+            message_type="response",
+        )
+        logger.info(f"[A2A] ✓ Auto-reply: {receiver_name} → {sender_name}")
+
+    except Exception as e:
+        logger.error(f"[A2A] Auto-reply error: {e}")
+
+
+# ─── Agent Management ─────────────────────────────────────────────────────────
+
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -142,12 +273,19 @@ async def root():
 
 @app.get("/api/health")
 async def health():
+    llm_status = LLM_ROUTER.status()
+    available_llms = [name for name, info in llm_status.items() if info.get("available", False)]
+    
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "agents": len(agents),
-        "llm_providers": LLM_ROUTER.available_providers(),
-        "skills": len(SKILL_REGISTRY.list())
+        "skills": len(SKILL_REGISTRY.list()),
+        "llm_providers": available_llms,
+        "llm_total": len(llm_status),
+        "llm_details": llm_status,
+        "database": "sqlite",
+        "database_status": "ready"
     }
 
 
@@ -171,6 +309,7 @@ async def create_agent(req: CreateAgentRequest):
     
     agent = Agent(persona=persona)
     agents[agent.id] = agent
+    
     save_agent_persona(persona)
     
     return {
@@ -184,6 +323,7 @@ async def create_agent(req: CreateAgentRequest):
 async def list_agents():
     """List all active agents."""
     return {
+        "success": True,
         "agents": [a.to_dict() for a in agents.values()],
         "count": len(agents)
     }
@@ -230,6 +370,8 @@ async def reset_agent(agent_id: str):
     return {"success": True, "message": "Session reset"}
 
 
+
+
 # ─── Chat & Tasks ─────────────────────────────────────────────────────────────
 
 @app.post("/api/chat")
@@ -259,22 +401,35 @@ async def run_task(req: TaskRequest, background_tasks: BackgroundTasks):
     
     async def run_and_broadcast():
         import concurrent.futures
+        import time
         step_queue: asyncio.Queue = asyncio.Queue()
         
+        # Track last thought time to throttle streaming
+        last_thought_time = [time.time()]
+        
         def on_thought(step: ThoughtStep):
-            # Thread-safe: put step into async queue
-            loop.call_soon_threadsafe(step_queue.put_nowait, step.to_dict())
+            # Thread-safe: put step into async queue with minimal throttling
+            # This allows thoughts to stream more smoothly
+            try:
+                loop.call_soon_threadsafe(step_queue.put_nowait, step.to_dict())
+                # Small sleep to allow UI to catch up
+                time.sleep(0.05)
+            except Exception as e:
+                logger.warning(f"Failed to queue thought: {e}")
         
         agent.on_thought(on_thought)
         
-        # Run CPU-bound agent.run() in a thread pool so it doesn't block the event loop
+        # Run CPU-bound agent execution in a thread pool
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        
+        # Use standard ReAct loop
         agent_future = loop.run_in_executor(executor, agent.run, req.task, req.max_iterations)
         
         # Drain the step queue while the agent is running, streaming steps via WebSocket
+        # Use shorter timeout to catch more frequent updates
         while not agent_future.done():
             try:
-                step_dict = await asyncio.wait_for(step_queue.get(), timeout=0.1)
+                step_dict = await asyncio.wait_for(step_queue.get(), timeout=0.05)
                 await manager.send(req.agent_id, {
                     "type": "thought_step",
                     "task_id": task_id,
@@ -282,11 +437,14 @@ async def run_task(req: TaskRequest, background_tasks: BackgroundTasks):
                 })
             except asyncio.TimeoutError:
                 continue
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Queue drain error: {e}")
                 break
         
-        # Drain any remaining steps
-        while not step_queue.empty():
+        # Drain any remaining steps with more aggressive waiting
+        max_retries = 100
+        retry_count = 0
+        while not step_queue.empty() and retry_count < max_retries:
             try:
                 step_dict = step_queue.get_nowait()
                 await manager.send(req.agent_id, {
@@ -295,7 +453,9 @@ async def run_task(req: TaskRequest, background_tasks: BackgroundTasks):
                     "step": step_dict
                 })
             except Exception:
-                break
+                retry_count += 1
+                await asyncio.sleep(0.01)
+                continue
         
         # Get the completed task
         try:
@@ -386,6 +546,79 @@ async def remove_task(task_id: str):
     if not delete_task(task_id):
         raise HTTPException(404, f"Task '{task_id}' not found")
     return {"success": True}
+
+
+@app.get("/api/files/download")
+async def download_file(path: str):
+    """Download a file from the data/files directory."""
+    # Security: ensure the path is within data/files/
+    files_dir = Path(__file__).parent / "data" / "files"
+    
+    # Normalize the path to prevent directory traversal attacks
+    requested_path = Path(path)
+    if requested_path.is_absolute():
+        # If absolute path is provided, make it relative to project root
+        try:
+            requested_path = requested_path.relative_to(Path(__file__).parent)
+        except ValueError:
+            raise HTTPException(400, "Invalid file path")
+    
+    # Construct full file path
+    file_path = Path(__file__).parent / requested_path
+    
+    # Security check: ensure resolved path is within allowed directories
+    try:
+        file_path = file_path.resolve()
+        allowed_dirs = [
+            (Path(__file__).parent / "data" / "files").resolve(),
+            (Path(__file__).parent / "data").resolve(),
+        ]
+        if not any(str(file_path).startswith(str(allowed_dir)) for allowed_dir in allowed_dirs):
+            raise HTTPException(403, "Access denied")
+    except Exception:
+        raise HTTPException(400, "Invalid file path")
+    
+    # Check if file exists
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, f"File not found: {path}")
+    
+    # Return the file
+    return FileResponse(
+        path=str(file_path),
+        filename=file_path.name,
+        media_type='application/octet-stream'
+    )
+
+
+@app.get("/api/files/list")
+async def list_files():
+    """List all files in the data/files directory."""
+    files_dir = Path(__file__).parent / "data" / "files"
+    files_dir.mkdir(parents=True, exist_ok=True)
+    
+    files_list = []
+    for file_path in files_dir.rglob("*"):
+        if file_path.is_file():
+            # Get file stats
+            stat = file_path.stat()
+            relative_path = file_path.relative_to(Path(__file__).parent)
+            
+            files_list.append({
+                "name": file_path.name,
+                "path": str(relative_path).replace("\\", "/"),
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "extension": file_path.suffix.lower()
+            })
+    
+    # Sort by modified time (newest first)
+    files_list.sort(key=lambda x: x["modified"], reverse=True)
+    
+    return {
+        "files": files_list,
+        "count": len(files_list),
+        "total_size": sum(f["size"] for f in files_list)
+    }
 
 
 # ─── Memory & Knowledge ───────────────────────────────────────────────────────
@@ -571,46 +804,344 @@ async def llm_status():
     return LLM_ROUTER.status()
 
 
+@app.get("/api/llm/configured")
+async def get_configured_providers():
+    """Get which providers are configured in environment variables."""
+    import os
+    configured = {}
+    
+    # Check OpenAI
+    if os.getenv("OPENAI_API_KEY"):
+        configured["openai"] = {
+            "available": True,
+            "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            "from_env": True
+        }
+    
+    # Check Gemini
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+        configured["gemini"] = {
+            "available": True,
+            "model": os.getenv("GEMINI_MODEL", "gemini-1.5-flash"),
+            "from_env": True
+        }
+    
+    # Check Claude
+    if os.getenv("ANTHROPIC_API_KEY"):
+        configured["claude"] = {
+            "available": True,
+            "model": os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
+            "from_env": True
+        }
+    
+    # Ollama doesn't need API key
+    configured["ollama"] = {
+        "available": True,
+        "model": os.getenv("OLLAMA_MODEL", "llama2"),
+        "note": "Local - no API key needed",
+        "from_env": bool(os.getenv("OLLAMA_MODEL"))
+    }
+    
+    return {"success": True, "configured": configured}
+
+
 @app.post("/api/llm/configure")
 async def configure_llm(config: Dict[str, Any]):
-    """Configure LLM providers."""
+    """Configure LLM providers.
+    
+    Updates environment variables and persists to .env file.
+    If api_key is provided, it will be saved to .env.
+    """
     provider = config.get("provider")
-    api_key = config.get("api_key")
+    api_key = config.get("api_key")  # Can be None
     model = config.get("model")
     
     if not provider:
         raise HTTPException(400, "Provider name required")
+    if not model:
+        raise HTTPException(400, "Model name required")
     
     import os
+    from pathlib import Path
+    from dotenv import load_dotenv
+    
+    # Map provider to env var names and model var names
+    env_mapping = {
+        "openai": ("OPENAI_API_KEY", "OPENAI_MODEL"),
+        "gemini": ("GEMINI_API_KEY", "GEMINI_MODEL"),
+        "claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"),
+    }
+    
+    if provider not in env_mapping:
+        raise HTTPException(400, f"Unknown provider: {provider}")
+    
+    api_key_var, model_var = env_mapping[provider]
+    
+    # Update environment variables in memory
     if api_key:
-        if provider == "openai":
-            os.environ["OPENAI_API_KEY"] = api_key
-        elif provider == "gemini":
-            os.environ["GEMINI_API_KEY"] = api_key
-        elif provider == "claude":
-            os.environ["ANTHROPIC_API_KEY"] = api_key
+        os.environ[api_key_var] = api_key
+    os.environ[model_var] = model
+    os.environ["DEFAULT_LLM_PROVIDER"] = provider
     
-    # Reinitialize the router
-    from core.llm import OpenAIProvider, GeminiProvider, AnthropicProvider
-    if provider == "openai":
-        LLM_ROUTER.register(OpenAIProvider(api_key=api_key, model=model or "gpt-4o-mini"))
-        LLM_ROUTER.set_default("openai")
-    elif provider == "gemini":
-        LLM_ROUTER.register(GeminiProvider(api_key=api_key, model=model or "gemini-1.5-flash"))
-        LLM_ROUTER.set_default("gemini")
-    elif provider == "claude":
-        LLM_ROUTER.register(AnthropicProvider(api_key=api_key, model=model or "claude-3-5-sonnet-20241022"))
-        LLM_ROUTER.set_default("claude")
+    # Persist to .env file
+    env_path = Path(".env")
+    if env_path.exists():
+        with open(env_path, "r") as f:
+            lines = f.readlines()
+        
+        # Update or add the config lines
+        updated_lines = []
+        found_api_key = False
+        found_model = False
+        found_provider = False
+        
+        for line in lines:
+            if line.startswith(api_key_var + "="):
+                if api_key:
+                    updated_lines.append(f"{api_key_var}={api_key}\n")
+                    found_api_key = True
+                else:
+                    updated_lines.append(line)  # Keep existing if no new key provided
+                    found_api_key = True
+            elif line.startswith(model_var + "="):
+                updated_lines.append(f"{model_var}={model}\n")
+                found_model = True
+            elif line.startswith("DEFAULT_LLM_PROVIDER="):
+                updated_lines.append(f"DEFAULT_LLM_PROVIDER={provider}\n")
+                found_provider = True
+            else:
+                updated_lines.append(line)
+        
+        # Add missing lines
+        if not found_api_key and api_key:
+            updated_lines.append(f"{api_key_var}={api_key}\n")
+        if not found_model:
+            updated_lines.append(f"{model_var}={model}\n")
+        if not found_provider:
+            updated_lines.append(f"DEFAULT_LLM_PROVIDER={provider}\n")
+        
+        with open(env_path, "w") as f:
+            f.writelines(updated_lines)
     
-    return {"success": True, "status": LLM_ROUTER.status()}
+    # Reinitialize the LLM router with new config
+    from core.llm import LLMRouter
+    global LLM_ROUTER
+    LLM_ROUTER = LLMRouter()
+    
+    return {
+        "success": True,
+        "provider": provider,
+        "model": model,
+        "message": f"LLM configured to {provider} → {model}",
+        "status": LLM_ROUTER.status()
+    }
+
+
+PROVIDER_CONFIG = {
+    'openai': {
+        'name': 'OpenAI',
+        'icon': '🔴',
+        'env_key': 'OPENAI_API_KEY',
+        'model_env_key': 'OPENAI_MODEL',
+        'default_model': 'gpt-4o-mini'
+    },
+    'gemini': {
+        'name': 'Google Gemini',
+        'icon': '🔵',
+        'env_key': 'GEMINI_API_KEY',
+        'model_env_key': 'GEMINI_MODEL',
+        'default_model': 'gemini-2.5-flash'
+    },
+    'claude': {
+        'name': 'Anthropic Claude',
+        'icon': '✨',
+        'env_key': 'ANTHROPIC_API_KEY',
+        'model_env_key': 'ANTHROPIC_MODEL',
+        'default_model': 'claude-3-5-sonnet-20241022'
+    },
+}
+
+@app.get("/api/llm/models")
+async def get_all_available_models():
+    """Get all available providers (users can use any model they want).
+    Shows which providers are configured based on environment variables."""
+    providers = {}
+    
+    for key, config in PROVIDER_CONFIG.items():
+        env_val = os.getenv(config['env_key'], '').strip()
+        is_configured = bool(env_val and env_val not in ('', 'your-anthropic-key-here', 'your-google-cloud-api-key-here'))
+        
+        providers[key] = {
+            'name': config['name'],
+            'icon': config['icon'],
+            'configured': is_configured,
+            'env_key': config['env_key']
+        }
+    
+    # Also check GOOGLE_API_KEY for gemini
+    if os.getenv('GOOGLE_API_KEY', '').strip() and os.getenv('GOOGLE_API_KEY', '').strip() not in ('your-google-cloud-api-key-here',):
+        providers['gemini']['configured'] = True
+    
+    return {
+        "success": True,
+        "providers": providers,
+        "note": "Enter any model name you want - not limited to a predefined list"
+    }
+
+@app.get("/api/llm/models/{provider}")
+async def get_provider_models(provider: str):
+    """Get provider info. Users can enter any model name they want."""
+    if provider not in PROVIDER_CONFIG:
+        return {"success": False, "error": f"Unknown provider: {provider}"}
+    
+    config = PROVIDER_CONFIG[provider]
+    env_val = os.getenv(config['env_key'], '').strip()
+    is_configured = bool(env_val and env_val not in ('', 'your-anthropic-key-here', 'your-google-cloud-api-key-here'))
+    
+    # Check GOOGLE_API_KEY for gemini
+    if provider == 'gemini' and os.getenv('GOOGLE_API_KEY', '').strip() and os.getenv('GOOGLE_API_KEY', '').strip() not in ('your-google-cloud-api-key-here',):
+        is_configured = True
+    
+    return {
+        "success": True,
+        "provider": config['name'],
+        "icon": config['icon'],
+        "configured": is_configured,
+        "env_key": config['env_key'],
+        "default_model": config['default_model'],
+        "note": "You can use any model name for this provider"
+    }
+
+@app.get("/api/llm/env-status")  
+async def get_llm_env_status():
+    """Check what LLM providers are configured in environment variables.
+    Returns a simple view of what's set (without exposing actual keys)."""
+    return {
+        "success": True,
+        "providers": {
+            "openai": {
+                "configured": bool(os.getenv('OPENAI_API_KEY', '').strip()),
+                "icon": "🔴"
+            },
+            "gemini": {
+                "configured": bool(os.getenv('GEMINI_API_KEY', '').strip() or os.getenv('GOOGLE_API_KEY', '').strip()),
+                "icon": "🔵"
+            },
+            "claude": {
+                "configured": bool(os.getenv('ANTHROPIC_API_KEY', '').strip()),
+                "icon": "✨"
+            }
+        }
+    }
+
+
+@app.get("/api/llm/current-config")
+async def get_current_llm_config():
+    """Get current LLM configuration (provider and model)."""
+    current_provider = os.getenv("DEFAULT_LLM_PROVIDER", "").strip()
+    
+    # Determine actual current provider based on availability
+    if not current_provider:
+        for provider in ["openai", "gemini", "claude"]:
+            if LLM_ROUTER._providers.get(provider, {}).is_available():
+                current_provider = provider
+                break
+    
+    if not current_provider:
+        current_provider = "mock"
+    
+    # Get provider config
+    provider_config = PROVIDER_CONFIG.get(current_provider, {})
+    
+    # Get current model from env, or use default
+    current_model = os.getenv(f"{current_provider.upper()}_MODEL", "").strip()
+    if not current_model and current_provider in PROVIDER_CONFIG:
+        current_model = PROVIDER_CONFIG[current_provider]['default_model']
+    elif not current_model:
+        current_model = "mock"
+    
+    return {
+        "success": True,
+        "provider": current_provider,
+        "provider_display": provider_config.get('name', current_provider),
+        "model": current_model,
+        "icon": provider_config.get('icon', '?'),
+        "available_providers": LLM_ROUTER.available_providers()
+    }
+
+
+@app.post("/api/llm/test")
+async def test_llm_connection(config: Dict[str, Any]):
+    """Test connection to an LLM provider.
+    
+    Returns: {success, model, message, provider}
+    """
+    provider = config.get("provider", "").strip()
+    
+    if not provider:
+        raise HTTPException(400, "Provider name required")
+    
+    if provider not in LLM_ROUTER._providers:
+        raise HTTPException(400, f"Unknown provider: {provider}")
+    
+    try:
+        llm_provider = LLM_ROUTER._providers[provider]
+        
+        # Check if available
+        if not llm_provider.is_available():
+            return {
+                "success": False,
+                "provider": provider,
+                "error": f"Provider {provider} is not configured (missing API key)"
+            }
+        
+        # Test with a simple message
+        test_messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Say 'Connection successful!' in exactly those words."}
+        ]
+        
+        response = llm_provider.complete(test_messages, temperature=0.1, max_tokens=50)
+        
+        return {
+            "success": True,
+            "provider": provider,
+            "model": response.model,
+            "message": f"Connection successful! Using {response.model}",
+            "response_sample": response.content[:100]  # First 100 chars of response
+        }
+    
+    except Exception as e:
+        return {
+            "success": False,
+            "provider": provider,
+            "error": f"Connection test failed: {str(e)[:200]}"
+        }
+
 
 
 # ─── Docs ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/docs/{doc_name}")
 async def get_doc(doc_name: str):
-    """Serve markdown documentation."""
-    docs_path = Path(__file__).parent / "docs" / f"{doc_name}.md"
+    """Serve markdown documentation from packages or project folders."""
+    docs_base = Path(__file__).parent / "docs"
+    
+    # Check if doc has section prefix (e.g., 'packages-installation')
+    if '-' in doc_name:
+        section, name = doc_name.split('-', 1)
+        docs_path = docs_base / section / f"{name}.md"
+    else:
+        # Try packages first, then project, then root
+        for location in [docs_base / "packages" / f"{doc_name}.md", 
+                         docs_base / "project" / f"{doc_name}.md",
+                         docs_base / f"{doc_name}.md"]:
+            if location.exists() and location.is_file():
+                docs_path = location
+                break
+        else:
+            raise HTTPException(404, "Doc not found")
+    
     if docs_path.exists() and docs_path.is_file():
         with open(docs_path, "r", encoding="utf-8") as f:
             return {"success": True, "content": f.read()}
@@ -618,13 +1149,144 @@ async def get_doc(doc_name: str):
 
 @app.get("/api/docs")
 async def list_docs():
-    """List available markdown docs."""
-    docs_path = Path(__file__).parent / "docs"
+    """List available markdown docs from packages and project folders."""
+    docs_base = Path(__file__).parent / "docs"
     docs = []
-    if docs_path.exists():
-        for file in docs_path.glob("*.md"):
+    
+    # List docs from packages folder
+    packages_path = docs_base / "packages"
+    if packages_path.exists():
+        for file in packages_path.glob("*.md"):
+            if file.name != "README.md" and file.name != "LINKS.md":
+                docs.append(f"packages-{file.stem}")
+    
+    # List docs from project folder
+    project_path = docs_base / "project"
+    if project_path.exists():
+        for file in project_path.glob("*.md"):
+            if file.name != "README.md":
+                docs.append(f"project-{file.stem}")
+    
+    # List index and core docs from root
+    for file in docs_base.glob("*.md"):
+        if file.name == "index.md":
+            docs.insert(0, "index")
+        elif file.name not in ["README.md"]:
             docs.append(file.stem)
+    
     return {"success": True, "docs": docs}
+
+
+# ─── MCP (Model Context Protocol) ─────────────────────────────────────────────
+
+# Global MCP server state
+_mcp_server_running = False
+_mcp_config = {"mode": "stdio", "port": 8001}
+
+@app.get("/api/mcp/status")
+async def mcp_status():
+    """Get MCP server status and available tools."""
+    try:
+        # Get skills from registry
+        tool_names = []
+        
+        if SKILL_REGISTRY and hasattr(SKILL_REGISTRY, '_skills'):
+            try:
+                # Use dictionary keys as skill names (this is the correct way)
+                tool_names = list(SKILL_REGISTRY._skills.keys())
+            except Exception as e:
+                logger.warning(f"Failed to get skills from registry: {e}")
+        
+        # Get agents - extract names from agent objects
+        agent_names = []
+        if agents:
+            try:
+                agent_names = [a.persona.name for a in agents.values()]
+            except Exception as e:
+                logger.warning(f"Failed to get agent names: {e}")
+        
+        tools_count = len(tool_names)
+        agents_count = len(agent_names)
+        
+        return {
+            "success": True,
+            "running": _mcp_server_running,
+            "server_name": "adgents",
+            "version": "1.0.0",
+            "supported_protocols": ["stdio", "sse"],
+            "available_tools": tools_count,
+            "tool_names": tool_names,
+            "available_agents": agents_count,
+            "agent_names": agent_names,
+            "config": _mcp_config,
+            "capability": {
+                "has_tools": tools_count > 0,
+                "has_agents": agents_count > 0,
+                "ready_for_connection": True
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error in mcp_status: {e}")
+        return {"success": False, "error": str(e), "running": False}
+
+@app.get("/api/mcp/tools")
+async def mcp_list_tools():
+    """List all skills available as MCP tools."""
+    tools = []
+    for skill_name, skill in SKILL_REGISTRY._skills.items():
+        tools.append({
+            "name": skill_name,
+            "description": skill.description,
+            "input_schema": skill.parameters
+        })
+    return {"success": True, "tools": tools}
+
+@app.post("/api/mcp/configure")
+async def mcp_configure(request: MCPConfigRequest):
+    """Configure MCP server settings (e.g., stdio vs SSE mode)."""
+    global _mcp_config
+    _mcp_config = {
+        "mode": request.mode or "stdio",
+        "port": request.port or 8001,
+    }
+    return {
+        "success": True,
+        "message": "MCP configured successfully",
+        "config": _mcp_config,
+    }
+
+@app.post("/api/mcp/start")
+async def mcp_start():
+    """Start the MCP server."""
+    global _mcp_server_running
+    try:
+        _mcp_server_running = True
+        return {
+            "success": True,
+            "message": "MCP server started",
+            "running": True,
+            "config": _mcp_config,
+            "tools_count": len(SKILL_REGISTRY._skills) if SKILL_REGISTRY else 0,
+            "agents_count": len(agents) if agents else 0,
+        }
+    except Exception as e:
+        _mcp_server_running = False
+        return {"success": False, "error": str(e), "message": "Failed to start MCP server"}
+
+@app.post("/api/mcp/stop")
+async def mcp_stop():
+    """Stop the MCP server."""
+    global _mcp_server_running
+    try:
+        _mcp_server_running = False
+        return {
+            "success": True,
+            "message": "MCP server stopped",
+            "running": False,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e), "message": "Failed to stop MCP server"}
+
 
 
 # ─── WebSocket ────────────────────────────────────────────────────────────────
@@ -665,27 +1327,318 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str):
         await manager.disconnect(websocket, agent_id)
 
 
-# ─── Multi-Agent Crew ─────────────────────────────────────────────────────────
+# ─── Agent Templates ──────────────────────────────────────────────────────────
 
-@app.post("/api/crew/run")
-async def run_crew(req: CrewRunRequest):
-    """Run an autonomous task using a multi-agent Crew."""
-    crew_agents = [agents[a_id] for a_id in req.agent_ids if a_id in agents]
-    if len(crew_agents) < 2:
-        raise HTTPException(400, "Crew requires at least 2 active agents")
-    
-    crew = Crew(name="Ad-hoc Crew", agents=crew_agents)
-    
-    # We will just run it in a thread executor
-    loop = asyncio.get_event_loop()
-    import concurrent.futures
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    
+@app.post("/api/templates/create")
+async def create_template(req: CreateTemplateRequest):
+    """Create an agent template."""
     try:
-        run_obj = await loop.run_in_executor(executor, crew.run, req.task)
-        return {"success": True, "run": run_obj.to_dict()}
+        crew_mgr = get_crew_manager()
+        template = crew_mgr.create_template(
+            name=req.name,
+            description=req.description,
+            role=req.role,
+            expertise=req.expertise,
+            skills=req.skills,
+            instructions=req.instructions,
+            model=req.model
+        )
+        return {
+            "success": True,
+            "template": template.to_dict(),
+            "message": f"Template created: {req.name}"
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+@app.get("/api/templates")
+async def list_templates():
+    """List all agent templates."""
+    try:
+        crew_mgr = get_crew_manager()
+        templates = crew_mgr.get_templates()
+        return {
+            "success": True,
+            "templates": [t.to_dict() for t in templates],
+            "count": len(templates)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/templates/{template_id}")
+async def get_template(template_id: str):
+    """Get a specific template."""
+    try:
+        crew_mgr = get_crew_manager()
+        template = crew_mgr.get_template(template_id)
+        if not template:
+            raise HTTPException(404, "Template not found")
+        return {
+            "success": True,
+            "template": template.to_dict()
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.delete("/api/templates/{template_id}")
+async def delete_template(template_id: str):
+    """Delete a template."""
+    try:
+        crew_mgr = get_crew_manager()
+        if crew_mgr.delete_template(template_id):
+            return {"success": True, "message": "Template deleted"}
+        return {"success": False, "error": "Template not found"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ─── Organizations ────────────────────────────────────────────────────────────
+
+@app.post("/api/organizations/create")
+async def create_organization(req: CreateOrganizationRequest):
+    """Create a new organization."""
+    try:
+        crew_mgr = get_crew_manager()
+        org = crew_mgr.create_organization(req.name, req.description)
+        return {
+            "success": True,
+            "organization": org,
+            "message": f"Organization created: {req.name}"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/organizations")
+async def list_organizations():
+    """List all organizations."""
+    try:
+        crew_mgr = get_crew_manager()
+        orgs = crew_mgr.list_organizations()
+        return {
+            "success": True,
+            "organizations": orgs,
+            "count": len(orgs)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/organizations/{org_id}")
+async def get_organization(org_id: str):
+    """Get organization details and statistics."""
+    try:
+        crew_mgr = get_crew_manager()
+        org = crew_mgr.get_organization(org_id)
+        if not org:
+            raise HTTPException(404, "Organization not found")
+        
+        stats = crew_mgr.get_organization_stats(org_id)
+        
+        return {
+            "success": True,
+            "organization": org,
+            "statistics": stats
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ─── Agent-to-Agent (A2A) Protocol ────────────────────────────────────────────
+
+@app.post("/api/a2a/send")
+async def send_a2a_message(req: SendA2AMessageRequest, background_tasks: BackgroundTasks):
+    """Send a message between two agents via A2A protocol and trigger autonomous reply."""
+    try:
+        crew_mgr = get_crew_manager()
+
+        crew = crew_mgr.get_crew(req.crew_id)
+        if not crew:
+            return {"success": False, "error": "Crew not found"}
+
+        agent_ids = {m.agent_id for m in crew.members}
+        if req.from_agent not in agent_ids or req.to_agent not in agent_ids:
+            return {"success": False, "error": "Agent not in crew"}
+
+        # Resolve human-readable names
+        from_member = next((m for m in crew.members if m.agent_id == req.from_agent), None)
+        to_member = next((m for m in crew.members if m.agent_id == req.to_agent), None)
+        from_name = from_member.agent_name if from_member else req.from_agent[:8]
+        to_name = to_member.agent_name if to_member else req.to_agent[:8]
+
+        result = await crew_mgr.send_message_between_agents(
+            crew_id=req.crew_id,
+            from_agent=req.from_agent,
+            to_agent=req.to_agent,
+            message=req.content,
+            from_name=from_name,
+            to_name=to_name,
+            message_type=req.message_type,
+        )
+
+        # Trigger receiving agent to reply autonomously in background
+        message_text = req.content.get("text", str(req.content)) if isinstance(req.content, dict) else str(req.content)
+        background_tasks.add_task(
+            _agent_auto_reply,
+            req.crew_id, req.to_agent, req.from_agent,
+            from_name, to_name, message_text,
+        )
+
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/a2a/broadcast")
+async def broadcast_a2a_message(req: BroadcastA2AMessageRequest, background_tasks: BackgroundTasks):
+    """Broadcast a message to all agents in a crew and trigger autonomous replies."""
+    try:
+        crew_mgr = get_crew_manager()
+
+        crew = crew_mgr.get_crew(req.crew_id)
+        if not crew:
+            return {"success": False, "error": "Crew not found"}
+
+        from_member = next((m for m in crew.members if m.agent_id == req.from_agent), None)
+        from_name = from_member.agent_name if from_member else req.from_agent[:8]
+
+        result = await crew_mgr.broadcast_to_crew(
+            crew_id=req.crew_id,
+            from_agent=req.from_agent,
+            message=req.content,
+        )
+
+        # Each receiving agent replies autonomously
+        message_text = req.content.get("text", str(req.content)) if isinstance(req.content, dict) else str(req.content)
+        for member in crew.members:
+            if member.agent_id != req.from_agent:
+                background_tasks.add_task(
+                    _agent_auto_reply,
+                    req.crew_id, member.agent_id, req.from_agent,
+                    from_name, member.agent_name, message_text,
+                )
+
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/a2a/communications/{crew_id}")
+async def get_crew_communications(crew_id: str):
+    """Get all communications in a crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        comms = crew_mgr.get_crew_communications(crew_id)
+        return {
+            "success": True,
+            "communications": comms,
+            "count": len(comms)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/a2a/communications/agent/{agent_id}")
+async def get_agent_communications(agent_id: str):
+    """Get all communications for a specific agent."""
+    try:
+        crew_mgr = get_crew_manager()
+        comms = crew_mgr.get_agent_communications(agent_id)
+        return {
+            "success": True,
+            "communications": comms,
+            "count": len(comms)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# ─── Crew Management Endpoints ────────────────────────────────────────────────
+
+@app.post("/api/crews/create")
+async def create_crew(req: CreateCrewRequest):
+    """Create a new crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        crew = crew_mgr.create_crew(
+            name=req.name,
+            description=req.description,
+            organization=req.organization,
+            members=req.members,
+            communication_protocol=req.communication_protocol
+        )
+        return {
+            "success": True,
+            "crew": crew.to_dict(),
+            "message": f"Crew created: {req.name}"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/crews")
+async def list_crews():
+    """List all crews."""
+    try:
+        crew_mgr = get_crew_manager()
+        crews = crew_mgr.list_crews()
+        return {
+            "success": True,
+            "crews": [c.to_dict() for c in crews],
+            "count": len(crews)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/crews/{crew_id}")
+async def get_crew(crew_id: str):
+    """Get a specific crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        crew = crew_mgr.get_crew(crew_id)
+        if not crew:
+            raise HTTPException(404, "Crew not found")
+        return {
+            "success": True,
+            "crew": crew.to_dict()
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/crews/{crew_id}/members")
+async def add_crew_member(crew_id: str, member_data: Dict[str, Any]):
+    """Add a member to a crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        success = crew_mgr.add_member_to_crew(
+            crew_id=crew_id,
+            agent_id=member_data["agent_id"],
+            agent_name=member_data["agent_name"],
+            role=member_data.get("role", "contributor")
+        )
+        if not success:
+            return {"success": False, "error": "Failed to add member"}
+        return {"success": True, "message": "Member added to crew"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.delete("/api/crews/{crew_id}")
+async def delete_crew(crew_id: str):
+    """Delete a crew."""
+    try:
+        crew_mgr = get_crew_manager()
+        success = crew_mgr.delete_crew(crew_id)
+        if not success:
+            return {"success": False, "error": "Crew not found"}
+        return {"success": True, "message": "Crew deleted successfully"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 
 # ─── MCP Endpoint ─────────────────────────────────────────────────────────────
 

@@ -334,8 +334,9 @@ class OllamaProvider(BaseLLMProvider):
         self.base_url = base_url
     
     def is_available(self) -> bool:
+        """Check if Ollama is available (with very short timeout)."""
         try:
-            with httpx.Client(timeout=5) as client:
+            with httpx.Client(timeout=1.0) as client:  # Reduced from 5 to 1 second
                 response = client.get(f"{self.base_url}/api/tags")
                 return response.status_code == 200
         except Exception:
@@ -407,23 +408,40 @@ class LLMRouter:
         self._auto_register()
     
     def _auto_register(self):
-        # Try each provider
+        # Try each provider (quick checks only - skip Ollama during startup to avoid blocking)
         providers = [
             OpenAIProvider(),
             GeminiProvider(),
             AnthropicProvider(),
-            OllamaProvider(),
+            # OllamaProvider(),  # Commented out to prevent blocking startup
             MockProvider()  # Always available as fallback
         ]
         
         for provider in providers:
-            self.register(provider)
-            if provider.is_available() and self._default_provider is None:
-                if provider.name != "mock":  # Prefer real providers
-                    self._default_provider = provider.name
+            try:
+                self.register(provider)
+                # Only check availability for quick providers
+                if provider.is_available() and self._default_provider is None:
+                    if provider.name != "mock":  # Prefer real providers
+                        self._default_provider = provider.name
+            except Exception as e:
+                print(f"Warning: Failed to register {provider().name if hasattr(provider, 'name') else 'provider'}: {e}")
+        
+        # Check for explicit DEFAULT_LLM_PROVIDER environment variable
+        env_provider = os.getenv("DEFAULT_LLM_PROVIDER")
+        if env_provider and env_provider in self._providers:
+            self._default_provider = env_provider
         
         if not self._default_provider:
             self._default_provider = "mock"
+        
+        # Register Ollama separately if explicitly configured
+        try:
+            ollama = OllamaProvider()
+            if ollama.is_available():
+                self.register(ollama)
+        except Exception:
+            pass  # Ollama not available, skip
     
     def register(self, provider: BaseLLMProvider):
         self._providers[provider.name] = provider
