@@ -4274,3 +4274,316 @@ textarea {
     margin-bottom: 0.3rem;
   }
 }
+
+/* ─── Agent OS Styles ─── */
+.pods-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.pod-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.pod-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(124, 58, 237, 0.3);
+  background: rgba(124, 58, 237, 0.02);
+  box-shadow: 0 8px 24px rgba(124, 58, 237, 0.1);
+}
+
+.pod-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.pod-name {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.pod-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pod-status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.pod-status.running .dot {
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+  animation: pulse 1.5s infinite;
+}
+
+.pod-status.healing .dot {
+  background: #f59e0b;
+  box-shadow: 0 0 8px #f59e0b;
+  animation: pulse 0.8s infinite;
+}
+
+.pod-status.suspended .dot {
+  background: var(--text-muted);
+}
+
+.pod-status.completed .dot {
+  background: #3b82f6;
+}
+
+.pod-status.failed .dot {
+  background: var(--red);
+}
+
+.pod-body {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  margin-bottom: 1rem;
+  min-height: 40px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pod-footer {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.pod-footer span {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.trace-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.01);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: 0.5rem;
+}
+
+.trace-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(124, 58, 237, 0.2);
+}
+
+.trace-item.active {
+  background: rgba(124, 58, 237, 0.08);
+  border-color: rgba(124, 58, 237, 0.4);
+}
+
+.trace-item-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.trace-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.trace-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Trace Tree Nodes */
+.span-node {
+  --indent-unit: 20px;
+  margin-left: calc(var(--depth, 0) * var(--indent-unit));
+  border-left: 2px solid rgba(124, 58, 237, 0.2);
+  padding-left: 1rem;
+  margin-bottom: 0.75rem;
+  position: relative;
+  animation: fadeIn 0.3s ease;
+}
+
+.span-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.85rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.span-header:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.span-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.span-badge {
+  font-size: 0.65rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.span-badge.thought { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+.span-badge.action { background: rgba(139, 92, 246, 0.15); color: #8b5cf6; }
+.span-badge.observation { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+.span-badge.llm { background: rgba(236, 72, 153, 0.15); color: #ec4899; }
+.span-badge.sre_diagnosis { background: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.4); }
+
+.span-duration {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.span-body {
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-xs) var(--radius-xs);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.span-body pre {
+  margin-top: 0.5rem;
+  background: rgba(0,0,0,0.3);
+  padding: 0.75rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: #c4b5fd;
+}
+
+/* ─── Responsive Layout for Agent OS ─── */
+.os-layout {
+  grid-template-columns: 1.2fr 1.8fr;
+}
+
+@media (max-width: 1024px) {
+  .os-layout {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .span-node {
+    --indent-unit: 10px; /* Reduce margin left indent on tablets */
+    padding-left: 0.75rem;
+  }
+  
+  .span-header {
+    padding: 0.5rem 0.75rem;
+  }
+  
+  .span-header-left {
+    font-size: 0.8rem;
+    gap: 0.4rem;
+  }
+  
+  .span-badge {
+    font-size: 0.6rem;
+    padding: 0.12rem 0.35rem;
+  }
+  
+  .pods-grid {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.75rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .span-node {
+    --indent-unit: 6px; /* Minimise left margin indent on mobile */
+    padding-left: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+  
+  .span-body {
+    padding: 0.75rem;
+    font-size: 0.78rem;
+  }
+  
+  .span-body pre {
+    padding: 0.5rem;
+    font-size: 0.7rem;
+  }
+  
+  .pods-grid {
+    grid-template-columns: 1fr; /* Switch to full-width cards on narrow screens */
+  }
+  
+  .pod-card {
+    padding: 1rem;
+  }
+}
+
+/* ─── Marketplace Styles ─── */
+.plugin-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 230px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  transition: all 0.3s ease;
+}
+
+.plugin-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(124, 58, 237, 0.4);
+  box-shadow: 0 12px 32px rgba(124, 58, 237, 0.15);
+}
+
+.badge-gray {
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: var(--text-secondary) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}

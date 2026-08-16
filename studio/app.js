@@ -31,6 +31,8 @@ function navigate(page) {
         builder: ['Build Agent', 'Create a new AI persona'],
         chat: ['Chat', 'Converse with your agents'],
         tasks: ['Tasks', 'Run autonomous workflows'],
+        agentos: ['🪐 Agent OS Cluster', 'Containerized runtimes, observability traces, and self-healing logs'],
+        marketplace: ['🔌 Connected Integration Marketplace', 'Link slack, github, and email notifications to your agents'],
         history: ['Task History', 'Browse all past autonomous task runs'],
         memory: ['Memory', "View and manage agents' memories"],
         skills: ['Skills', 'Tools available to your agents'],
@@ -50,6 +52,14 @@ function navigate(page) {
     if (page === 'agents') renderAgentsGrid();
     if (page === 'chat') renderChatPicker();
     if (page === 'tasks') populateTaskAgentSelect();
+    if (page === 'agentos') {
+        populateOSAgentSelect();
+        refreshPods();
+        loadTracesList();
+    }
+    if (page === 'marketplace') {
+        loadPluginsList();
+    }
 
     if (page === 'crews') loadCrewsPage();
     if (page === 'history') loadHistory();
@@ -3052,4 +3062,529 @@ async function broadcastCrewMessage() {
         console.error('[Error] Broadcast error:', e);
         toast('❌ Error: ' + e.message, 'error');
     }
+}
+
+/* ─── Agent OS Page Logic ─────────────────────────────────────────────────── */
+
+function populateOSAgentSelect() {
+    const select = document.getElementById('os-agent-select');
+    if (!select) return;
+    
+    const agents = Object.values(state.agents);
+    select.innerHTML = '<option value="">— Select Agent Pod —</option>' + 
+        agents.map(a => `<option value="${a.persona.id}">${a.persona.name} (${a.persona.role})</option>`).join('');
+}
+
+async function refreshPods() {
+    try {
+        const res = await api('/pods');
+        if (!res.success) throw new Error(res.error || 'Failed to fetch pods');
+        
+        const grid = document.getElementById('pods-grid');
+        if (!grid) return;
+        
+        const pods = res.pods || [];
+        
+        // Update Stats Summary
+        let activeCount = 0;
+        let totalCost = 0.0;
+        let totalTokens = 0;
+        
+        pods.forEach(p => {
+            if (p.status === 'running' || p.status === 'healing') {
+                activeCount++;
+            }
+            totalCost += p.cost || 0;
+            totalTokens += p.tokens_used || 0;
+        });
+        
+        document.getElementById('stat-active-pods').textContent = activeCount;
+        document.getElementById('stat-cost').textContent = '$' + totalCost.toFixed(4);
+        document.getElementById('stat-tokens').textContent = totalTokens.toLocaleString();
+        
+        // Set badging badge
+        const badge = document.getElementById('pod-count-badge');
+        if (badge) {
+            badge.textContent = activeCount;
+            badge.style.display = activeCount > 0 ? 'inline-block' : 'none';
+        }
+        
+        if (pods.length === 0) {
+            grid.innerHTML = '<div class="empty-state-small" style="grid-column: 1/-1;">No active agent pods. Launch one below!</div>';
+            return;
+        }
+        
+        // Re-fetch SRE heals count by fetching all pod interventions
+        let healsCount = 0;
+        const renderPromises = pods.map(async (p) => {
+            let podDetail;
+            try {
+                const resDetail = await fetch(`http://localhost:8000/api/pods/${p.id}`);
+                podDetail = await resDetail.json();
+                healsCount += (podDetail.interventions || []).length;
+            } catch(err) {}
+            
+            const avatar = state.agents[p.agent_id]?.persona?.avatar || '🤖';
+            const costStr = p.cost ? p.cost.toFixed(4) : '0.0000';
+            const tokensStr = p.tokens_used ? p.tokens_used.toLocaleString() : '0';
+            
+            return `
+                <div class="pod-card" onclick="loadPodTraces('${p.id}')">
+                    <div class="pod-header">
+                        <span class="pod-name">${avatar} ${p.name}</span>
+                        <div class="pod-status ${p.status}">
+                            <span class="dot"></span>
+                            <span>${p.status}</span>
+                        </div>
+                    </div>
+                    <div class="pod-body">
+                        <strong>Task:</strong> ${escapeHtml(p.task_text)}
+                    </div>
+                    <div class="pod-footer">
+                        <span>🪙 ${tokensStr}</span>
+                        <span>💵 $${costStr}</span>
+                    </div>
+                    <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem;" onclick="event.stopPropagation()">
+                        ${(p.status === 'running' || p.status === 'healing') ? `<button class="btn btn-ghost btn-xs" style="flex:1" onclick="suspendPod('${p.id}')">⏸️ Suspend</button>` : ''}
+                        ${p.status === 'suspended' ? `<button class="btn btn-ghost btn-xs" style="flex:1" onclick="resumePod('${p.id}')">▶️ Resume</button>` : ''}
+                        ${(p.status === 'running' || p.status === 'healing' || p.status === 'suspended') ? `<button class="btn btn-danger btn-xs" style="padding: 0.25rem 0.6rem; border-radius: var(--radius-xs);" onclick="stopPod('${p.id}')">🛑 Stop</button>` : ''}
+                    </div>
+                </div>
+            `;
+        });
+        
+        const htmlParts = await Promise.all(renderPromises);
+        grid.innerHTML = htmlParts.join('');
+        
+        document.getElementById('stat-heals').textContent = healsCount;
+        
+    } catch(e) {
+        console.error('[AgentOS] Error refreshing pods:', e);
+    }
+}
+
+async function suspendPod(podId) {
+    try {
+        const res = await api(`/pods/${podId}/suspend`, 'POST');
+        if (res.success) {
+            toast(`Pod ${podId} suspended.`, 'info');
+            refreshPods();
+        }
+    } catch(e) {
+        toast(e.message, 'error');
+    }
+}
+
+async function resumePod(podId) {
+    try {
+        const res = await api(`/pods/${podId}/resume`, 'POST');
+        if (res.success) {
+            toast(`Pod ${podId} resumed.`, 'info');
+            refreshPods();
+        }
+    } catch(e) {
+        toast(e.message, 'error');
+    }
+}
+
+async function stopPod(podId) {
+    try {
+        const res = await api(`/pods/${podId}/stop`, 'POST');
+        if (res.success) {
+            toast(`Pod ${podId} stopped.`, 'warning');
+            refreshPods();
+        }
+    } catch(e) {
+        toast(e.message, 'error');
+    }
+}
+
+async function launchPod() {
+    const agentId = document.getElementById('os-agent-select').value;
+    const maxIter = parseInt(document.getElementById('os-max-iter').value) || 10;
+    const taskText = document.getElementById('os-task-text').value.trim();
+    
+    if (!agentId) {
+        toast('Please select an agent pod runtime.', 'error');
+        return;
+    }
+    if (!taskText) {
+        toast('Please enter a task description for the sandbox.', 'error');
+        return;
+    }
+    
+    try {
+        const res = await api('/tasks', 'POST', {
+            agent_id: agentId,
+            task: taskText,
+            max_iterations: maxIter
+        });
+        
+        toast('🚀 Agent Pod Container launched!', 'success');
+        document.getElementById('os-task-text').value = '';
+        
+        // Refresh grid
+        setTimeout(() => {
+            refreshPods();
+            loadTracesList();
+        }, 800);
+        
+    } catch(e) {
+        toast(e.message, 'error');
+    }
+}
+
+async function loadTracesList() {
+    try {
+        const res = await api('/obs/traces');
+        if (!res.success) throw new Error(res.error || 'Failed to fetch traces');
+        
+        const panel = document.getElementById('trace-list-panel');
+        if (!panel) return;
+        
+        const traces = res.traces || [];
+        if (traces.length === 0) {
+            panel.innerHTML = '<div class="empty-state-small">No traces recorded yet.</div>';
+            return;
+        }
+        
+        panel.innerHTML = traces.map(t => {
+            const timeStr = t.started_at ? new Date(t.started_at).toLocaleString() : '';
+            const statusClass = t.status === 'completed' ? 'badge-green' : t.status === 'failed' ? 'badge-red' : 'badge-blue';
+            return `
+                <div class="trace-item" id="trace-row-${t.id}" onclick="loadTraceTree('${t.id}')">
+                    <div class="trace-item-left">
+                        <span class="trace-name">🔍 ${escapeHtml(t.name)}</span>
+                        <span class="trace-meta">📅 ${timeStr} | Pod: ${t.pod_id || 'Proxy'}</span>
+                    </div>
+                    <span class="badge ${statusClass}">${t.status}</span>
+                </div>
+            `;
+        }).join('');
+        
+    } catch(e) {
+        console.error('[AgentOS] Error loading traces:', e);
+    }
+}
+
+async function loadPodTraces(podId) {
+    try {
+        const res = await api(`/obs/traces?pod_id=${podId}`);
+        if (!res.success) throw new Error(res.error || 'Failed to fetch pod traces');
+        
+        const panel = document.getElementById('trace-list-panel');
+        if (!panel) return;
+        
+        const traces = res.traces || [];
+        if (traces.length === 0) {
+            panel.innerHTML = `<div class="empty-state-small">No traces found for pod ${podId}</div>`;
+            return;
+        }
+        
+        panel.innerHTML = traces.map(t => {
+            const timeStr = t.started_at ? new Date(t.started_at).toLocaleString() : '';
+            const statusClass = t.status === 'completed' ? 'badge-green' : t.status === 'failed' ? 'badge-red' : 'badge-blue';
+            return `
+                <div class="trace-item" id="trace-row-${t.id}" onclick="loadTraceTree('${t.id}')">
+                    <div class="trace-item-left">
+                        <span class="trace-name">🔍 ${escapeHtml(t.name)}</span>
+                        <span class="trace-meta">📅 ${timeStr} | Pod: ${t.pod_id || 'Proxy'}</span>
+                    </div>
+                    <span class="badge ${statusClass}">${t.status}</span>
+                </div>
+            `;
+        }).join('');
+        
+        // Auto-load first trace tree
+        if (traces.length > 0) {
+            loadTraceTree(traces[0].id);
+        }
+        
+    } catch(e) {
+        toast(e.message, 'error');
+    }
+}
+
+async function loadTraceTree(traceId) {
+    // Highlight selected row
+    document.querySelectorAll('.trace-item').forEach(el => el.classList.remove('active'));
+    document.getElementById(`trace-row-${traceId}`)?.classList.add('active');
+    
+    try {
+        const res = await api(`/obs/traces/${traceId}`);
+        if (!res.success) throw new Error(res.error || 'Failed to load trace details');
+        
+        const treeContainer = document.getElementById('trace-tree-container');
+        if (!treeContainer) return;
+        
+        document.getElementById('active-trace-title').textContent = `Trace: ${res.trace.name} (Tokens: ${res.trace.total_tokens} | Cost: $${(res.trace.total_cost || 0).toFixed(4)})`;
+        
+        const spans = res.spans || [];
+        if (spans.length === 0) {
+            treeContainer.innerHTML = '<div class="empty-state-small">No spans found in trace.</div>';
+            return;
+        }
+        
+        // Calculate nested depths based on parent span IDs
+        const spanMap = {};
+        spans.forEach(s => {
+            spanMap[s.id] = { ...s, children: [], depth: 0 };
+        });
+        
+        const roots = [];
+        spans.forEach(s => {
+            const mapped = spanMap[s.id];
+            if (s.parent_span_id && spanMap[s.parent_span_id]) {
+                spanMap[s.parent_span_id].children.push(mapped);
+            } else {
+                roots.push(mapped);
+            }
+        });
+        
+        // Calculate depths recursively
+        function setDepth(node, currentDepth) {
+            node.depth = currentDepth;
+            node.children.forEach(child => setDepth(child, currentDepth + 1));
+        }
+        roots.forEach(r => setDepth(r, 0));
+        
+        // Flatten tree list to render sequentially with depth margins
+        const listToRender = [];
+        function flatten(node) {
+            listToRender.push(node);
+            node.children.forEach(child => flatten(child));
+        }
+        roots.forEach(r => flatten(r));
+        
+        // Load interventions for this pod to map them
+        let interventions = [];
+        if (res.trace.pod_id) {
+            try {
+                const podDetailRes = await fetch(`http://localhost:8000/api/pods/${res.trace.pod_id}`);
+                const podDetail = await podDetailRes.json();
+                interventions = podDetail.interventions || [];
+            } catch(e) {}
+        }
+        
+        treeContainer.innerHTML = listToRender.map(s => {
+            const hasChildren = s.children.length > 0;
+            const hasDetails = s.input || s.output || s.error;
+            
+            // Format dur
+            let durationStr = '';
+            if (s.started_at && s.completed_at) {
+                const start = new Date(s.started_at);
+                const end = new Date(s.completed_at);
+                durationStr = ((end - start) / 1000).toFixed(2) + 's';
+            }
+            
+            // Input/Output JSON pretty printing
+            let inputPretty = '';
+            try {
+                inputPretty = JSON.stringify(JSON.parse(s.input), null, 2);
+            } catch(err) {
+                inputPretty = s.input || 'None';
+            }
+            
+            let outputPretty = '';
+            try {
+                outputPretty = JSON.stringify(JSON.parse(s.output), null, 2);
+            } catch(err) {
+                outputPretty = s.output || 'None';
+            }
+            
+            // Look for matching healing intervention
+            const matchIntv = interventions.find(i => i.span_id === s.id);
+            let sreDiagnosisHtml = '';
+            if (matchIntv) {
+                sreDiagnosisHtml = `
+                    <div style="margin-top: 0.75rem; padding: 0.75rem; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 4px; border-left: 3px solid #f59e0b;">
+                        <div style="font-weight: 700; color: #f59e0b; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">🩹 SRE Kernel Healing diagnosis</div>
+                        <div style="font-size: 0.8rem; color: var(--text-primary); margin-bottom: 0.25rem;"><strong>Diagnosis:</strong> ${escapeHtml(matchIntv.diagnosis)}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary);"><strong>Patch (${matchIntv.patch_type}):</strong> <code>${escapeHtml(matchIntv.patch_content)}</code></div>
+                    </div>
+                `;
+            }
+            
+            const statusSymbol = s.status === 'success' ? '✅' : s.status === 'error' ? '❌' : '⏳';
+            
+            return `
+                <div class="span-node" style="--depth: ${s.depth};">
+                    <div class="span-header" onclick="toggleSpanBody('${s.id}')">
+                        <div class="span-header-left">
+                            <span class="span-badge ${s.span_type}">${s.span_type}</span>
+                            <span class="span-name">${escapeHtml(s.name)}</span>
+                            <span>${statusSymbol}</span>
+                        </div>
+                        <span class="span-duration">${durationStr}</span>
+                    </div>
+                    <div class="span-body" id="span-body-${s.id}" style="display:none">
+                        ${s.input ? `<div><strong>Input:</strong> <pre>${escapeHtml(inputPretty)}</pre></div>` : ''}
+                        ${s.output ? `<div style="margin-top:0.5rem;"><strong>Output:</strong> <pre>${escapeHtml(outputPretty)}</pre></div>` : ''}
+                        ${s.error ? `<div style="color:var(--red); margin-top:0.5rem;"><strong>Error trace:</strong> <pre>${escapeHtml(s.error)}</pre></div>` : ''}
+                        ${sreDiagnosisHtml}
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+    } catch(e) {
+        toast(e.message, 'error');
+    }
+}
+
+function toggleSpanBody(spanId) {
+    const el = document.getElementById(`span-body-${spanId}`);
+    if (el) {
+        el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+/* ─── Marketplace & Plugins UI Logic ─────────────────────────────────────── */
+
+let marketplacePlugins = []; // Cache list of plugins
+
+async function loadPluginsList() {
+    try {
+        const res = await api('/plugins');
+        if (!res.success) throw new Error(res.error || 'Failed to fetch plugins');
+        
+        marketplacePlugins = res.plugins || [];
+        
+        marketplacePlugins.forEach(p => {
+            const badge = document.getElementById(`plugin-badge-${p.plugin_id}`);
+            const card = document.getElementById(`plugin-card-${p.plugin_id}`);
+            const discBtn = document.getElementById(`plugin-disconnect-btn-${p.plugin_id}`);
+            
+            if (badge) {
+                if (p.status === 'connected') {
+                    badge.textContent = 'Connected';
+                    badge.className = 'badge badge-green';
+                    if (discBtn) discBtn.style.display = 'inline-block';
+                    if (card) card.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+                } else {
+                    badge.textContent = 'Disconnected';
+                    badge.className = 'badge badge-gray';
+                    if (discBtn) discBtn.style.display = 'none';
+                    if (card) card.style.borderColor = 'var(--border)';
+                }
+            }
+        });
+    } catch (e) {
+        console.error('[Marketplace] Error loading plugins:', e);
+    }
+}
+
+function openConnectModal(pluginId) {
+    const p = marketplacePlugins.find(x => x.plugin_id === pluginId);
+    if (!p) return;
+    
+    document.getElementById('connect-plugin-id').value = pluginId;
+    document.getElementById('connect-modal-title').textContent = `Configure ${p.name}`;
+    
+    const fieldsContainer = document.getElementById('connect-modal-fields');
+    if (!fieldsContainer) return;
+    
+    let fieldsHtml = '';
+    const cfg = p.config || {};
+    
+    if (pluginId === 'github') {
+        fieldsHtml = `
+            <div class="form-group" style="margin-bottom: 1rem;">
+                <label>GitHub Personal Access Token (PAT)</label>
+                <input type="password" id="github-token" class="form-input" placeholder="ghp_..." value="${cfg.token || ''}" style="width:100%" />
+                <span style="font-size:0.75rem; color:var(--text-muted);">We need read/write repository permission to perform commits and PRs.</span>
+            </div>
+            <div class="form-group">
+                <label>Default Repository (format: owner/repo)</label>
+                <input type="text" id="github-repo" class="form-input" placeholder="e.g. facebook/react" value="${cfg.repository || ''}" style="width:100%" />
+            </div>
+        `;
+    } else if (pluginId === 'slack') {
+        fieldsHtml = `
+            <div class="form-group" style="margin-bottom: 1rem;">
+                <label>Slack Incoming Webhook URL</label>
+                <input type="password" id="slack-webhook" class="form-input" placeholder="https://hooks.slack.com/services/..." value="${cfg.webhook_url || ''}" style="width:100%" />
+            </div>
+            <div class="form-group">
+                <label>Default Notification Channel</label>
+                <input type="text" id="slack-channel" class="form-input" placeholder="e.g. dev-alerts" value="${cfg.channel || ''}" style="width:100%" />
+            </div>
+        `;
+    } else if (pluginId === 'email') {
+        fieldsHtml = `
+            <div class="form-group" style="margin-bottom: 1rem;">
+                <label>SMTP Server Address</label>
+                <input type="text" id="email-smtp" class="form-input" value="${cfg.smtp_server || 'smtp.gmail.com'}" style="width:100%" />
+            </div>
+            <div class="form-group" style="margin-bottom: 1rem;">
+                <label>Sender Email Address</label>
+                <input type="text" id="email-sender" class="form-input" placeholder="agent@gmail.com" value="${cfg.sender_email || ''}" style="width:100%" />
+            </div>
+            <div class="form-group">
+                <label>SMTP Account Password / App Key</label>
+                <input type="password" id="email-password" class="form-input" placeholder="Your app password" value="${cfg.password || ''}" style="width:100%" />
+            </div>
+        `;
+    }
+    
+    fieldsContainer.innerHTML = fieldsHtml;
+    document.getElementById('marketplace-modal-overlay').style.display = 'flex';
+}
+
+function closeConnectModal() {
+    document.getElementById('marketplace-modal-overlay').style.display = 'none';
+}
+
+async function submitConnectPlugin(event) {
+    event.preventDefault();
+    const pluginId = document.getElementById('connect-plugin-id').value;
+    
+    let config = {};
+    if (pluginId === 'github') {
+        config = {
+            token: document.getElementById('github-token').value.trim(),
+            repository: document.getElementById('github-repo').value.trim()
+        };
+    } else if (pluginId === 'slack') {
+        config = {
+            webhook_url: document.getElementById('slack-webhook').value.trim(),
+            channel: document.getElementById('slack-channel').value.trim()
+        };
+    } else if (pluginId === 'email') {
+        config = {
+            smtp_server: document.getElementById('email-smtp').value.trim(),
+            sender_email: document.getElementById('email-sender').value.trim(),
+            password: document.getElementById('email-password').value.trim()
+        };
+    }
+    
+    try {
+        const res = await api(`/plugins/${pluginId}/connect`, 'POST', config);
+        if (res.success) {
+            toast(`🔌 ${pluginId.toUpperCase()} Connected Successfully!`, 'success');
+            closeConnectModal();
+            loadPluginsList();
+        } else {
+            toast(res.error || 'Connection failed', 'error');
+        }
+    } catch (e) {
+        toast(e.message, 'error');
+    }
+}
+
+async function disconnectPluginAndUI(pluginId) {
+    confirmAction(`Disconnect the ${pluginId.toUpperCase()} integration? Active credentials will be deleted.`, async () => {
+        try {
+            const res = await api(`/plugins/${pluginId}/disconnect`, 'POST');
+            if (res.success) {
+                toast(`Disconnected ${pluginId.toUpperCase()}`, 'info');
+                loadPluginsList();
+            } else {
+                toast(res.error || 'Failed to disconnect', 'error');
+            }
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    });
 }

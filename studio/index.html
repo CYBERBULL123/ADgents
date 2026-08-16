@@ -77,9 +77,14 @@
             <span class="nav-icon">💬</span>
             <span>Chat</span>
         </a>
-        <a class="nav-item" data-page="tasks" onclick="navigate('tasks');closeSidebar()">
-            <span class="nav-icon">⚡</span>
-            <span>Tasks</span>
+        <a class="nav-item" data-page="agentos" onclick="navigate('agentos');closeSidebar()">
+            <span class="nav-icon">🪐</span>
+            <span>Agent OS</span>
+            <span class="nav-badge" id="pod-count-badge" style="display:none">0</span>
+        </a>
+        <a class="nav-item" data-page="marketplace" onclick="navigate('marketplace');closeSidebar()">
+            <span class="nav-icon">🔌</span>
+            <span>Marketplace</span>
         </a>
         <a class="nav-item" data-page="history" onclick="navigate('history');closeSidebar()">
             <span class="nav-icon">📜</span>
@@ -436,87 +441,173 @@
                 </div>
             </section>
 
-            <!-- ── TASKS ── -->
-            <section class="page" id="page-tasks">
+            <!-- ── AGENT OS ── -->
+            <section class="page" id="page-agentos">
+                <!-- Metrics Panel -->
+                <div class="stats-grid" style="margin-bottom: 1.5rem;">
+                    <div class="stat-card">
+                        <div class="stat-icon">🪐</div>
+                        <div class="stat-value" id="stat-active-pods">0</div>
+                        <div class="stat-label">Agent Pods</div>
+                        <div class="stat-trend" id="stat-pods-trend">Active runtimes</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🩹</div>
+                        <div class="stat-value" id="stat-heals">0</div>
+                        <div class="stat-label">SRE Self-Heals</div>
+                        <div class="stat-trend" id="stat-heals-trend">Dynamic recovery</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🪙</div>
+                        <div class="stat-value" id="stat-tokens">0</div>
+                        <div class="stat-label">Tokens Used</div>
+                        <div class="stat-trend" id="stat-tokens-trend">Cumulative</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">💵</div>
+                        <div class="stat-value" id="stat-cost">$0.00</div>
+                        <div class="stat-label">Total Cost</div>
+                        <div class="stat-trend">Estimated USD</div>
+                    </div>
+                </div>
 
-                <!-- Task Execution Controls -->
-                <div style="margin-bottom: 1.5rem;">
-                    <h3 style="margin: 0 0 1rem 0; color: var(--text-primary);">Execute Agent Tasks</h3>
-
-                    <div class="task-control-bar">
-                        <div class="task-agent-group">
-                            <label class="task-label">Select Agent</label>
-                            <select id="task-agent-select" class="task-select">
-                                <option value="">— Choose an Agent —</option>
-                            </select>
+                <div class="two-col os-layout">
+                    <!-- Pod Runtimes Controller -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>🪐 Active Agent Pods</h3>
+                            <button class="btn btn-ghost btn-xs" onclick="refreshPods()">🔄 Refresh</button>
+                        </div>
+                        <div class="pods-grid" id="pods-grid">
+                            <!-- Active Pods get injected here -->
+                            <div class="empty-state-small">No active agent pods. Create a run below.</div>
                         </div>
 
-                        <div class="task-input-group">
-                            <label class="task-label">Task Description</label>
-                            <textarea id="task-description" class="task-textarea"
-                                placeholder="Describe the task — e.g. Research the latest AI trends and write a summary report"
-                                rows="3"></textarea>
+                        <div class="card-header" style="margin-top: 2rem;">
+                            <h3>⚡ Create Agent Pod / Run Sandbox</h3>
                         </div>
-
-                        <div class="task-options-group">
-                            <div class="task-iter-row">
-                                <label class="task-label">Iterations: <strong id="max-iter-val">10</strong></label>
-                                <input type="range" id="task-max-iter" min="3" max="20" value="10"
-                                    oninput="document.getElementById('max-iter-val').textContent=this.value" />
-                                <div class="task-iter-marks"><span>3</span><span>20</span></div>
+                        <div class="form-grid" style="margin-top: 1rem;">
+                            <div class="form-group">
+                                <label>Agent Pod Runtime</label>
+                                <select id="os-agent-select" style="width: 100%; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); padding: 0.6rem; border-radius: 8px;">
+                                    <option value="">— Select Agent Pod —</option>
+                                </select>
                             </div>
-                            <button class="btn btn-primary task-run-btn" onclick="startTask()">
-                                ⚡ Run Task
-                            </button>
-                        </div>
-                    </div>
-                    <div style="padding: 1rem; background: rgba(59, 130, 246, 0.1); border-left: 3px solid #3b82f6; border-radius: 4px; margin-top: 1rem;">
-                        <div style="font-size: 0.85rem; color: var(--text-secondary);">
-                            <strong>Autonomous Task Execution:</strong> The selected agent will execute the task using ReAct reasoning with autonomous decision-making.
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Live task feed -->
-                <div class="task-feed-card">
-                    <div class="task-feed-header">
-                        <div class="task-feed-title">
-                            <span id="task-feed-icon">📋</span>
-                            <span id="task-feed-heading">Task Steps</span>
-                        </div>
-                        <div class="task-feed-meta">
-                            <span class="badge badge-blue" id="task-status-badge" style="display:none">Running</span>
-                            <button class="btn btn-ghost btn-xs" onclick="clearTaskFeed()">Clear</button>
-                        </div>
-                    </div>
-                    <div class="task-steps" id="task-steps">
-                        <div class="task-empty-state">
-                            <div class="task-empty-icon">⚡</div>
-                            <div class="task-empty-title">Ready for Tasks</div>
-                            <div class="task-empty-desc">Choose an agent, describe the task, then hit Run.<br>You'll see the agent's thoughts and actions here in real-time.</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ── TASK RESULT PANEL ── -->
-                <div class="task-result-panel" id="task-result-panel" style="display:none">
-                    <div class="task-result-header">
-                        <div class="task-result-title">
-                            <span class="task-result-icon">✅</span>
-                            <div>
-                                <div class="task-result-label">Task Complete</div>
-                                <div class="task-result-agent" id="task-result-agent-name"></div>
+                            <div class="form-group">
+                                <label>Max Iteration Limits</label>
+                                <input type="number" id="os-max-iter" value="10" min="1" max="30" style="width: 100%; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); padding: 0.6rem; border-radius: 8px;" />
+                            </div>
+                            <div class="form-group full-width">
+                                <label>Task Context / Sandbox Instruction</label>
+                                <textarea id="os-task-text" rows="3" placeholder="Define the task (e.g. Write Python code to read a non-existent file to test SRE self-healing)..." style="width: 100%; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); padding: 0.8rem; border-radius: 8px; font-family: var(--font); resize: vertical;"></textarea>
                             </div>
                         </div>
-                        <div class="task-result-actions">
-                            <button class="btn btn-ghost btn-xs" onclick="copyTaskResult()" title="Copy result">📋
-                                Copy</button>
-                            <button class="btn btn-ghost btn-xs" onclick="closeTaskResult()" title="Dismiss">✕</button>
+                        <button class="btn btn-primary" onclick="launchPod()" style="margin-top: 1rem; width: 100%;">🚀 Launch Pod Runtime</button>
+                    </div>
+
+                    <!-- Live Trace & Interventions Panel -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>👁️ Observability Traces</h3>
+                            <button class="btn btn-ghost btn-xs" onclick="loadTracesList()">🔄 Refresh</button>
+                        </div>
+                        <div class="trace-list-panel" id="trace-list-panel" style="max-height: 250px; overflow-y: auto; margin-top: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem;">
+                            <!-- Traces get injected here -->
+                            <div class="empty-state-small">No traces yet. Launch a pod above to log steps.</div>
+                        </div>
+
+                        <div class="card-header" style="margin-top: 1.5rem;">
+                            <h3>🌲 Trace Span Hierarchy & SRE Logs</h3>
+                            <div id="active-trace-title" style="font-size: 0.85rem; color: var(--text-secondary); font-weight: 500;">Select a trace above to visualize tree</div>
+                        </div>
+                        <div class="trace-tree-container" id="trace-tree-container" style="max-height: 400px; overflow-y: auto; margin-top: 1rem; padding: 1rem; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid var(--border);">
+                            <div class="empty-state-small">Select a trace to view spans.</div>
                         </div>
                     </div>
-                    <div class="task-result-body md-content" id="task-result-body"></div>
+                </div>
+            </section>
+
+            <!-- ── MARKETPLACE ── -->
+            <section class="page" id="page-marketplace">
+                <div class="card-header" style="margin-bottom: 1.5rem;">
+                    <h3>🔌 Connected Integration Marketplace</h3>
+                    <p style="margin: 0.25rem 0 0 0; font-size: 0.85rem; color: var(--text-secondary);">Link workspace apps and developer environments to your agents</p>
+                </div>
+                
+                <div class="marketplace-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem;">
+                    
+                    <!-- GitHub Card -->
+                    <div class="plugin-card card" id="plugin-card-github">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+                            <span style="font-size: 2.2rem;">💻</span>
+                            <span class="badge" id="plugin-badge-github">Disconnected</span>
+                        </div>
+                        <h4 style="margin: 0; color: var(--text-primary); font-size: 1.1rem;">GitHub Integration</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0 1.25rem 0; line-height: 1.4;">
+                            Allows coding agents to search repositories, read issues, commit files, and build Pull Requests.
+                        </p>
+                        <div style="margin-top: auto; display: flex; gap: 0.5rem;">
+                            <button class="btn btn-primary btn-sm" style="flex:1" onclick="openConnectModal('github')">Configure</button>
+                            <button class="btn btn-danger btn-sm" id="plugin-disconnect-btn-github" style="display:none" onclick="disconnectPluginAndUI('github')">Disconnect</button>
+                        </div>
+                    </div>
+
+                    <!-- Slack Card -->
+                    <div class="plugin-card card" id="plugin-card-slack">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+                            <span style="font-size: 2.2rem;">💬</span>
+                            <span class="badge" id="plugin-badge-slack">Disconnected</span>
+                        </div>
+                        <h4 style="margin: 0; color: var(--text-primary); font-size: 1.1rem;">Slack Alerts</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0 1.25rem 0; line-height: 1.4;">
+                            Enables agents to post execution alerts, notify channels on task completion, and report SRE heals.
+                        </p>
+                        <div style="margin-top: auto; display: flex; gap: 0.5rem;">
+                            <button class="btn btn-primary btn-sm" style="flex:1" onclick="openConnectModal('slack')">Configure</button>
+                            <button class="btn btn-danger btn-sm" id="plugin-disconnect-btn-slack" style="display:none" onclick="disconnectPluginAndUI('slack')">Disconnect</button>
+                        </div>
+                    </div>
+
+                    <!-- Email Card -->
+                    <div class="plugin-card card" id="plugin-card-email">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+                            <span style="font-size: 2.2rem;">✉️</span>
+                            <span class="badge" id="plugin-badge-email">Disconnected</span>
+                        </div>
+                        <h4 style="margin: 0; color: var(--text-primary); font-size: 1.1rem;">SMTP / Gmail alerts</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0 1.25rem 0; line-height: 1.4;">
+                            Send email notifications to administrators or check inbox mail for critical outage reporting commands.
+                        </p>
+                        <div style="margin-top: auto; display: flex; gap: 0.5rem;">
+                            <button class="btn btn-primary btn-sm" style="flex:1" onclick="openConnectModal('email')">Configure</button>
+                            <button class="btn btn-danger btn-sm" id="plugin-disconnect-btn-email" style="display:none" onclick="disconnectPluginAndUI('email')">Disconnect</button>
+                        </div>
+                    </div>
+
                 </div>
 
+                <!-- Connect Modals (Overlay hidden by default) -->
+                <div class="modal-overlay" id="marketplace-modal-overlay" style="display:none;" onclick="closeConnectModal()">
+                    <div class="modal" onclick="event.stopPropagation()">
+                        <div class="modal-header">
+                            <span class="modal-title" id="connect-modal-title">Configure Plugin</span>
+                            <button class="modal-close" onclick="closeConnectModal()">✕</button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="connect-plugin-form" onsubmit="submitConnectPlugin(event)">
+                                <input type="hidden" id="connect-plugin-id" />
+                                
+                                <!-- Dynamic input fields get injected here -->
+                                <div id="connect-modal-fields"></div>
+                                
+                                <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.5rem;">
+                                    <button type="button" class="btn btn-ghost" onclick="closeConnectModal()">Cancel</button>
+                                    <button type="submit" class="btn btn-primary">Connect Integration</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <!-- ── HISTORY ── -->

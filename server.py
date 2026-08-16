@@ -423,7 +423,7 @@ async def run_task(req: TaskRequest, background_tasks: BackgroundTasks):
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         
         # Use standard ReAct loop
-        agent_future = loop.run_in_executor(executor, agent.run, req.task, req.max_iterations)
+        agent_future = loop.run_in_executor(executor, agent.run, req.task, req.max_iterations, task_id)
         
         # Drain the step queue while the agent is running, streaming steps via WebSocket
         # Use shorter timeout to catch more frequent updates
@@ -1638,7 +1638,323 @@ async def delete_crew(crew_id: str):
         return {"success": True, "message": "Crew deleted successfully"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+# ─── Agent OS Observability & Monitoring Endpoints ──────────────────────────────
 
+from core.trace_db import (
+    list_pods, get_pod as db_get_pod, update_pod as db_update_pod, 
+    list_traces, get_trace as db_get_trace, get_trace_spans, 
+    list_healing_interventions, create_trace, create_span, update_span, update_trace
+)
+
+class ChatCompletionMessage(BaseModel):
+    role: str
+    content: Optional[str] = ""
+
+class ChatCompletionRequest(BaseModel):
+    model: str
+    messages: List[ChatCompletionMessage]
+    temperature: Optional[float] = 0.7
+    max_tokens: Optional[int] = 2048
+    tools: Optional[List[Dict[str, Any]]] = None
+
+@app.get("/api/pods")
+async def api_list_pods(status: Optional[str] = None):
+    """List all agent pod runtimes."""
+    try:
+        pods = list_pods(status=status)
+        return {"success": True, "pods": pods, "count": len(pods)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/pods/{pod_id}")
+async def api_get_pod(pod_id: str):
+    """Get active state and healing history of a pod."""
+    pod = db_get_pod(pod_id)
+    if not pod:
+        raise HTTPException(404, f"Pod '{pod_id}' not found")
+    
+    # Fetch healing interventions
+    interventions = list_healing_interventions(pod_id=pod_id)
+    return {
+        "success": True,
+        "pod": pod,
+        "interventions": interventions
+    }
+
+@app.post("/api/pods/{pod_id}/suspend")
+async def suspend_pod(pod_id: str):
+    """Suspend a running agent pod."""
+    pod = db_update_pod(pod_id, status="suspended")
+    if not pod:
+        raise HTTPException(404, f"Pod '{pod_id}' not found")
+    return {"success": True, "message": f"Pod '{pod_id}' suspended successfully.", "status": pod["status"]}
+
+@app.post("/api/pods/{pod_id}/resume")
+async def resume_pod(pod_id: str):
+    """Resume a suspended/healing agent pod."""
+    pod = db_update_pod(pod_id, status="running")
+    if not pod:
+        raise HTTPException(404, f"Pod '{pod_id}' not found")
+    return {"success": True, "message": f"Pod '{pod_id}' resumed successfully.", "status": pod["status"]}
+
+@app.post("/api/pods/{pod_id}/stop")
+async def stop_pod(pod_id: str):
+    """Stop/Terminate a running agent pod."""
+    pod = db_update_pod(pod_id, status="stopped")
+    if not pod:
+        raise HTTPException(404, f"Pod '{pod_id}' not found")
+    return {"success": True, "message": f"Pod '{pod_id}' stopped successfully.", "status": pod["status"]}
+
+@app.get("/api/obs/traces")
+async def api_list_traces(pod_id: Optional[str] = None, limit: int = 50):
+    """List execution traces."""
+    try:
+        traces = list_traces(pod_id=pod_id, limit=limit)
+        return {"success": True, "traces": traces, "count": len(traces)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/obs/traces/{trace_id}")
+async def api_get_trace(trace_id: str):
+    """Get full hierarchical tree of spans for a trace."""
+    trace = db_get_trace(trace_id)
+    if not trace:
+        raise HTTPException(404, f"Trace '{trace_id}' not found")
+    
+    spans = get_trace_spans(trace_id)
+    return {
+        "success": True,
+        "trace": trace,
+        "spans": spans
+    }
+
+# ─── Plugins & Marketplace Endpoints ─────────────────────────────────────────
+
+from core.plugin_db import list_plugins, connect_plugin, disconnect_plugin
+from core.plugin_manager import register_active_plugin_tools
+
+@app.get("/api/plugins")
+async def api_list_plugins():
+    """List all workspace plugins and their connection states."""
+    try:
+        plugins = list_plugins()
+        return {"success": True, "plugins": plugins}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/plugins/{plugin_id}/connect")
+async def api_connect_plugin(plugin_id: str, config: dict):
+    """Save config and connect a plugin, reloading skill registry."""
+    try:
+        plugin = connect_plugin(plugin_id, config)
+        # Reload registered tools dynamically!
+        register_active_plugin_tools()
+        return {"success": True, "plugin": plugin}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/plugins/{plugin_id}/disconnect")
+async def api_disconnect_plugin(plugin_id: str):
+    """Disconnect a plugin and clear its registered tools."""
+    try:
+        plugin = disconnect_plugin(plugin_id)
+        # Reload registered tools dynamically!
+        register_active_plugin_tools()
+        return {"success": True, "plugin": plugin}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# ─── IDE Gateway Refactoring Endpoint ───────────────────────────────────────
+
+class IDERefactorRequest(BaseModel):
+    code: str
+    prompt: str
+    filename: Optional[str] = "main.py"
+    language: Optional[str] = "python"
+
+@app.post("/api/ide/refactor")
+async def ide_refactor(req: IDERefactorRequest):
+    """IDE gateway endpoint: receives code, optimizes/refactors it, and returns git-style unified diff."""
+    # Find a coding agent
+    coding_agent = None
+    if agents:
+        # Prefer HULK or any agent with developer skills
+        for aid, a in agents.items():
+            if "code_execute" in (a.persona.skills or []):
+                coding_agent = a
+                break
+        if not coding_agent:
+            coding_agent = list(agents.values())[0]
+            
+    if not coding_agent:
+        # Create a temporary coding agent if none exist
+        from core.agent import Agent
+        from core.agent import AgentPersona
+        from core.skills import SKILL_REGISTRY
+        from core.llm import LLM_ROUTER
+        
+        persona = AgentPersona(
+            name="IDE_Coder",
+            avatar="💻",
+            role="Senior Software Engineer",
+            backstory="You are an expert coder integrated directly into a code editor. You refactor files and return clean, efficient code.",
+            skills=["code_execute", "file_read", "file_write"]
+        )
+        coding_agent = Agent(persona=persona, llm=LLM_ROUTER, skill_registry=SKILL_REGISTRY)
+        
+    task_prompt = f"""You are acting as an IDE refactoring assistant.
+Refactor the following file: '{req.filename}' (language: {req.language}).
+
+**User Request/Refactoring Command**: {req.prompt}
+
+**Source Code**:
+```
+{req.code}
+```
+
+Please perform the edits. If you need to write files, do it locally.
+Finally, present the refactored code clearly. You MUST return the complete refactored code block inside a code block marked with the language (or just raw triple backticks). I will compile a git diff from your output."""
+
+    # Execute agent in sync/thread-safe way since this is a direct POST call
+    import concurrent.futures
+    import difflib
+    import uuid
+    
+    loop = asyncio.get_event_loop()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    
+    task_id = f"ide_{str(uuid.uuid4())[:8]}"
+    agent_task = await loop.run_in_executor(
+        executor, coding_agent.run, task_prompt, 8, task_id
+    )
+    
+    # Extract the refactored code block from the result content
+    import re
+    result_text = agent_task.result or ""
+    
+    # Try to find code block in markdown output
+    code_blocks = re.findall(rf"```(?:{req.language})?\n(.*?)\n```", result_text, re.DOTALL | re.IGNORECASE)
+    
+    refactored_code = req.code
+    if code_blocks:
+        refactored_code = code_blocks[0].strip()
+    else:
+        # Fallback: check if the agent returned clean text or try raw block parsing
+        blocks = re.findall(r"```\n(.*?)\n```", result_text, re.DOTALL)
+        if blocks:
+            refactored_code = blocks[0].strip()
+            
+    # Calculate Unified Git Diff
+    diff_lines = difflib.unified_diff(
+        req.code.splitlines(),
+        refactored_code.splitlines(),
+        fromfile=f"a/{req.filename}",
+        tofile=f"b/{req.filename}",
+        lineterm=""
+    )
+    diff_text = "\n".join(diff_lines)
+    
+    return {
+        "success": True,
+        "task_id": task_id,
+        "original_code": req.code,
+        "refactored_code": refactored_code,
+        "diff": diff_text or "No changes made."
+    }
+
+@app.post("/api/v1/chat/completions")
+async def traced_chat_completions(req: ChatCompletionRequest):
+    """OpenAI-compatible completion endpoint with automatic tracing."""
+    import uuid
+    from datetime import datetime
+    
+    trace_id = f"tr_{str(uuid.uuid4())[:8]}"
+    span_id = f"span_{str(uuid.uuid4())[:8]}"
+    
+    # 1. Start Trace
+    create_trace(trace_id, pod_id=None, name=f"Proxy Chat: {req.model}")
+    create_span(
+        span_id=span_id,
+        trace_id=trace_id,
+        name=f"ChatCompletion Call",
+        span_type="llm",
+        input_data={"messages": [m.dict() for m in req.messages], "tools": req.tools}
+    )
+    
+    # 2. Invoke Router
+    try:
+        messages_raw = [{"role": m.role, "content": m.content} for m in req.messages]
+        
+        response = LLM_ROUTER.complete(
+            messages=messages_raw,
+            tools=req.tools,
+            temperature=req.temperature,
+            max_tokens=req.max_tokens
+        )
+        
+        # Calculate pricing
+        tokens_in = response.input_tokens or 0
+        tokens_out = response.output_tokens or 0
+        total_tokens = tokens_in + tokens_out
+        cost = (tokens_in * 0.00000015) + (tokens_out * 0.00000060)
+        
+        # Update Span and Trace
+        message_dict = {"role": "assistant", "content": response.content or ""}
+        if response.has_tool_calls():
+            message_dict["tool_calls"] = [
+                {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": json.dumps(tc["arguments"])
+                    }
+                }
+                for tc in response.tool_calls
+            ]
+            
+        update_span(
+            span_id=span_id,
+            status="success",
+            output=message_dict,
+            tokens_input=tokens_in,
+            tokens_output=tokens_out,
+            cost=cost,
+            completed_at=datetime.utcnow().isoformat()
+        )
+        update_trace(
+            trace_id=trace_id,
+            status="completed",
+            total_tokens=total_tokens,
+            total_cost=cost,
+            completed_at=datetime.utcnow().isoformat()
+        )
+        
+        # 3. Format OpenAI response
+        return {
+            "id": f"chatcmpl-{trace_id}",
+            "object": "chat.completion",
+            "created": int(datetime.utcnow().timestamp()),
+            "model": req.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message_dict,
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": tokens_in,
+                "completion_tokens": tokens_out,
+                "total_tokens": total_tokens
+            }
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        update_span(span_id=span_id, status="error", error=error_msg, completed_at=datetime.utcnow().isoformat())
+        update_trace(trace_id=trace_id, status="failed", completed_at=datetime.utcnow().isoformat())
+        raise HTTPException(500, error_msg)
 
 # ─── MCP Endpoint ─────────────────────────────────────────────────────────────
 
@@ -1650,8 +1966,8 @@ app.include_router(mcp_server.get_fastapi_router(), prefix="/mcp")
 
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting ADgents API Server...")
-    print("📡 API: http://localhost:8000")
-    print("🎨 Studio: http://localhost:8000/studio")
-    print("📚 Docs: http://localhost:8000/docs")
+    print("[ADgents] Starting API Server...")
+    print("API: http://localhost:8000")
+    print("Studio: http://localhost:8000/studio")
+    print("Docs: http://localhost:8000/docs")
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)

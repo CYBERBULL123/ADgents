@@ -148,36 +148,61 @@ class Agent:
         self.status = AgentStatus.IDLE
         return response.content
     
-    def run(self, task: str, max_iterations: int = None) -> AgentTask:
+    def run(self, task: str, max_iterations: int = None, pod_id: str = None) -> AgentTask:
         """
-        Run an autonomous task using the ReAct loop.
-        The agent plans, executes skills, observes results, and reflects.
+        Run an autonomous task using the ReAct loop with trace logging and self-healing.
         """
+        import uuid
+        from datetime import datetime
+        from .trace_db import (
+            create_pod, create_trace, create_span, update_span, update_pod, get_pod, update_trace
+        )
+        from .sre_supervisor import SRE_SUPERVISOR
+
         max_iter = max_iterations or self.max_iterations
         
-        agent_task = AgentTask(description=task, started_at=datetime.utcnow().isoformat())
+        # 1. Initialize Pod and Trace
+        self.pod_id = pod_id or self.pod_id or f"pod_{str(uuid.uuid4())[:8]}"
+        self.trace_id = self.pod_id
+        
+        pod_entry = get_pod(self.pod_id)
+        if not pod_entry:
+            create_pod(self.pod_id, self.name, self.id, task)
+        else:
+            update_pod(self.pod_id, status="running", task_text=task)
+            
+        create_trace(self.trace_id, self.pod_id, f"Run: {task[:50]}")
+
+        agent_task = AgentTask(id=self.trace_id, description=task, started_at=datetime.utcnow().isoformat())
         self.current_task = agent_task
         agent_task.status = "running"
         
         # Build available tools for this agent
-        skill_names = self.persona.skills if self.persona.skills else None
+        skill_names = list(self.persona.skills) if self.persona.skills else None
+        if skill_names is not None:
+            # Dynamically make all connected integrations tools available
+            active_integration_skills = self.skill_registry.list(category="integration")
+            for s in active_integration_skills:
+                if s.name not in skill_names:
+                    skill_names.append(s.name)
+        
         tools = self.skill_registry.get_openai_tools(skill_names)
         
         # Initial planning
         self.status = AgentStatus.THINKING
         
+        from .plugin_db import get_plugin_context_string
+        plugin_context = get_plugin_context_string()
+        
         planning_prompt = f"""I need to complete this task:
-
+ 
 **Task**: {task}
-
-Let me think step by step about how to approach this:
-1. What is the goal?
-2. What information or resources do I need?
-3. Which of my skills are relevant?
-4. What's my action plan?
-
+ 
 I'll use my available tools to complete this task autonomously."""
         
+        if plugin_context:
+            planning_prompt = f"{plugin_context}\n\n{planning_prompt}"
+            
         context = self.memory.get_relevant_context(task)
         if context:
             planning_prompt = f"[Relevant Memory]\n{context}\n\n{planning_prompt}"
@@ -191,15 +216,69 @@ I'll use my available tools to complete this task autonomously."""
         agent_task.add_step(thought_step)
         self._emit_thought(thought_step)
         
+        # Root run span
+        root_span_id = f"span_{str(uuid.uuid4())[:8]}"
+        create_span(root_span_id, self.trace_id, "Master Task Execution", "thought", input_data={"task": task})
+
         # ReAct Loop
         iteration = 0
         skill_call_counts: dict = {}   # skill_name -> call count this task
         seen_calls: set = set()        # (skill_name, args_hash) already executed
+        
+        total_tokens = 0
+        total_cost = 0.0
+
         while iteration < max_iter:
+            # Check Pod status for suspension or stop signal
+            pod_state = get_pod(self.pod_id)
+            if pod_state:
+                status_val = pod_state.get("status")
+                if status_val == "suspended":
+                    # Loop and wait until resumed or stopped
+                    self._emit_thought(ThoughtStep(step_type="thought", content=f"[Agent OS] Pod execution suspended. Pausing ReAct loop..."))
+                    while True:
+                        import time
+                        time.sleep(1)
+                        pod_check = get_pod(self.pod_id)
+                        if not pod_check or pod_check.get("status") != "suspended":
+                            break
+                    
+                    # Recheck status after resuming
+                    pod_state = get_pod(self.pod_id)
+                    if pod_state and pod_state.get("status") in ("stopped", "failed"):
+                        self._emit_thought(ThoughtStep(step_type="thought", content=f"[Agent OS] Pod execution terminated by operator."))
+                        update_pod(self.pod_id, status="failed")
+                        update_trace(self.trace_id, status="failed", completed_at=datetime.utcnow().isoformat())
+                        update_span(root_span_id, status="error", error="Execution terminated by operator", completed_at=datetime.utcnow().isoformat())
+                        agent_task.status = "failed"
+                        agent_task.error = "Execution terminated by operator"
+                        agent_task.completed_at = datetime.utcnow().isoformat()
+                        self.status = AgentStatus.ERROR
+                        return agent_task
+                    self._emit_thought(ThoughtStep(step_type="thought", content=f"[Agent OS] Resuming pod execution..."))
+                
+                elif status_val in ("stopped", "failed"):
+                    self._emit_thought(ThoughtStep(step_type="thought", content=f"[Agent OS] Pod execution terminated by operator."))
+                    update_pod(self.pod_id, status="failed")
+                    update_trace(self.trace_id, status="failed", completed_at=datetime.utcnow().isoformat())
+                    update_span(root_span_id, status="error", error="Execution terminated by operator", completed_at=datetime.utcnow().isoformat())
+                    agent_task.status = "failed"
+                    agent_task.error = "Execution terminated by operator"
+                    agent_task.completed_at = datetime.utcnow().isoformat()
+                    self.status = AgentStatus.ERROR
+                    return agent_task
+
             iteration += 1
             self.status = AgentStatus.THINKING
             
+            iter_span_id = f"span_{str(uuid.uuid4())[:8]}"
+            create_span(iter_span_id, self.trace_id, f"Iteration {iteration}", "thought", parent_span_id=root_span_id)
+            
             messages = self.memory.working.get_llm_messages()
+            
+            # Trace LLM request
+            llm_span_id = f"span_{str(uuid.uuid4())[:8]}"
+            create_span(llm_span_id, self.trace_id, f"LLM Completion Run {iteration}", "llm", parent_span_id=iter_span_id, input_data={"messages_count": len(messages)})
             
             try:
                 response = self.llm.complete(
@@ -207,12 +286,47 @@ I'll use my available tools to complete this task autonomously."""
                     tools=tools if tools else None,
                     temperature=self.persona.creativity
                 )
+                
+                # Update tokens and cost
+                tokens_in = response.input_tokens or 0
+                tokens_out = response.output_tokens or 0
+                total_tokens += (tokens_in + tokens_out)
+                
+                # Simple cost calculation
+                cost = (tokens_in * 0.00000015) + (tokens_out * 0.00000060)
+                total_cost += cost
+                
+                update_span(
+                    llm_span_id, 
+                    status="success", 
+                    output={"content": response.content, "tool_calls": response.tool_calls},
+                    tokens_input=tokens_in,
+                    tokens_output=tokens_out,
+                    cost=cost,
+                    completed_at=datetime.utcnow().isoformat()
+                )
+                
+                # Update pod and trace with stats
+                update_pod(self.pod_id, tokens_used=total_tokens, cost=total_cost)
+                update_trace(self.trace_id, total_tokens=total_tokens, total_cost=total_cost)
+                
             except Exception as e:
                 error_msg = f"LLM Error: {type(e).__name__}: {str(e)}"
-                err_step = ThoughtStep(
-                    step_type="observation",
-                    content=error_msg
-                )
+                update_span(llm_span_id, status="error", error=error_msg, completed_at=datetime.utcnow().isoformat())
+                update_span(iter_span_id, status="error", error=error_msg, completed_at=datetime.utcnow().isoformat())
+                
+                # SRE Intercept for LLM failure
+                self._emit_thought(ThoughtStep(step_type="thought", content=f"[SRE Kernel Intercept] LLM call failed. Triggering diagnosis..."))
+                update_pod(self.pod_id, status="healing")
+                heal_result = SRE_SUPERVISOR.diagnose_and_heal(self.pod_id, llm_span_id, error_msg, self)
+                
+                if heal_result["applied"] and heal_result["patch_type"] == "memory_append":
+                    # SRE injected diagnosis instruction, try to loop again
+                    iteration -= 1  # retry this iteration
+                    continue
+                
+                # If SRE couldn't heal, fail task
+                err_step = ThoughtStep(step_type="observation", content=error_msg)
                 agent_task.add_step(err_step)
                 self._emit_thought(err_step)
                 agent_task.error = error_msg
@@ -220,11 +334,12 @@ I'll use my available tools to complete this task autonomously."""
                 agent_task.result = error_msg
                 agent_task.completed_at = datetime.utcnow().isoformat()
                 self.status = AgentStatus.ERROR
+                update_pod(self.pod_id, status="failed")
+                update_trace(self.trace_id, status="failed", completed_at=datetime.utcnow().isoformat())
+                update_span(root_span_id, status="error", error=error_msg, completed_at=datetime.utcnow().isoformat())
                 return agent_task
             
-            # Add assistant response to working memory.
-            # When there are tool calls, we MUST store the assistant message with the
-            # tool_calls array so OpenAI sees a valid: assistant(tool_calls) → tool → ...
+            # Process response and store
             if response.has_tool_calls():
                 openai_tool_calls = [
                     {
@@ -242,13 +357,11 @@ I'll use my available tools to complete this task autonomously."""
                     response.content or "",
                     tool_calls=openai_tool_calls
                 )
-                # Emit any accompanying thought text
                 if response.content:
                     thought_step = ThoughtStep(step_type="thought", content=response.content)
                     agent_task.add_step(thought_step)
                     self._emit_thought(thought_step)
             else:
-                # No tool calls — store content normally
                 if response.content:
                     self.memory.working.add_message("assistant", response.content)
                     thought_step = ThoughtStep(step_type="thought", content=response.content)
@@ -263,41 +376,41 @@ I'll use my available tools to complete this task autonomously."""
                     skill_name = tool_call["name"]
                     skill_args = tool_call["arguments"]
 
-                    # ── Deduplication guard ──────────────────────────────────
-                    import hashlib, json as _json
+                    tool_span_id = f"span_{str(uuid.uuid4())[:8]}"
+                    create_span(
+                        tool_span_id, self.trace_id, f"Skill Execute: {skill_name}", "action", 
+                        parent_span_id=iter_span_id, input_data=skill_args
+                    )
+
+                    # Deduplication guard
+                    import hashlib
                     args_key = hashlib.md5(
-                        _json.dumps(skill_args, sort_keys=True).encode()
+                        json.dumps(skill_args, sort_keys=True).encode()
                     ).hexdigest()
                     call_sig = (skill_name, args_key)
 
                     skill_call_counts[skill_name] = skill_call_counts.get(skill_name, 0) + 1
 
-                    if call_sig in seen_calls:
-                        # Duplicate call — inject a fake observation and skip
-                        dup_msg = (
-                            f"[Already executed '{skill_name}' with these exact arguments. "
-                            f"Use the previous result shown above to write your final answer.]"
-                        )
-                        self.memory.working.add_message("user", dup_msg)
+                    # Check for repetitiveness
+                    if call_sig in seen_calls or skill_call_counts[skill_name] > 3:
+                        dup_error = f"Loop Detected: Skill '{skill_name}' called repetitively or exceeded safe iteration counts."
+                        update_span(tool_span_id, status="error", error=dup_error, completed_at=datetime.utcnow().isoformat())
+                        
+                        # Trigger SRE Self-Healing
+                        self._emit_thought(ThoughtStep(step_type="thought", content=f"[SRE Kernel Intercept] Loop / high repetition detected on '{skill_name}'. Initiating healing..."))
+                        update_pod(self.pod_id, status="healing")
+                        heal_result = SRE_SUPERVISOR.diagnose_and_heal(self.pod_id, tool_span_id, dup_error, self)
+                        
+                        obs_content = f"[SRE Kernel Injected Correction]\n"
+                        if heal_result["applied"]:
+                            obs_content += f"Diagnosis: {heal_result['diagnosis']}\nInstruction: {heal_result['patch_content']}"
+                        else:
+                            obs_content += f"SRE could not heal this loop automatically. Please break the cycle."
+                            
+                        self.memory.working.add_message("user", obs_content)
                         obs_step = ThoughtStep(
                             step_type="observation",
-                            content=dup_msg,
-                            skill_used=skill_name
-                        )
-                        agent_task.add_step(obs_step)
-                        self._emit_thought(obs_step)
-                        continue
-
-                    if skill_call_counts[skill_name] > 3:
-                        # Too many calls to the same skill — halt it
-                        limit_msg = (
-                            f"['{skill_name}' has been called {skill_call_counts[skill_name]} times. "
-                            f"No more calls to this skill are allowed. Synthesize from existing results.]"
-                        )
-                        self.memory.working.add_message("user", limit_msg)
-                        obs_step = ThoughtStep(
-                            step_type="observation",
-                            content=limit_msg,
+                            content=obs_content,
                             skill_used=skill_name
                         )
                         agent_task.add_step(obs_step)
@@ -305,7 +418,6 @@ I'll use my available tools to complete this task autonomously."""
                         continue
 
                     seen_calls.add(call_sig)
-                    # ── End deduplication guard ──────────────────────────────
                     
                     action_step = ThoughtStep(
                         step_type="action",
@@ -316,13 +428,46 @@ I'll use my available tools to complete this task autonomously."""
                     self._emit_thought(action_step)
                     
                     # Execute skill
-                    result: SkillResult = self.skill_registry.execute(skill_name, **skill_args)
+                    result = self.skill_registry.execute(skill_name, **skill_args)
                     result_text = result.to_text()
                     
-                    # Track files created during task execution
+                    if not result.success:
+                        # Intercept error and run SRE Self-Healing
+                        update_span(tool_span_id, status="error", error=result.error, completed_at=datetime.utcnow().isoformat())
+                        self._emit_thought(ThoughtStep(step_type="thought", content=f"[SRE Kernel Intercept] Skill '{skill_name}' execution failed. Running SRE diagnosis..."))
+                        update_pod(self.pod_id, status="healing")
+                        
+                        heal_result = SRE_SUPERVISOR.diagnose_and_heal(self.pod_id, tool_span_id, result.error, self)
+                        
+                        # Handle parameter overrides
+                        if heal_result["applied"] and heal_result["patch_type"] == "param_override":
+                            try:
+                                override_args = json.loads(heal_result["patch_content"])
+                                self._emit_thought(ThoughtStep(step_type="thought", content=f"[SRE Kernel] Retrying '{skill_name}' with overridden parameters: {override_args}"))
+                                retry_result = self.skill_registry.execute(skill_name, **override_args)
+                                if retry_result.success:
+                                    update_span(
+                                        tool_span_id, status="success", output=retry_result.to_text(), 
+                                        error=None, completed_at=datetime.utcnow().isoformat()
+                                    )
+                                    result = retry_result
+                                    result_text = retry_result.to_text()
+                                else:
+                                    result_text = retry_result.to_text()
+                            except Exception as parse_err:
+                                result_text = f"SRE override failed: {parse_err}\nOriginal Error: {result.error}"
+                        else:
+                            # SRE memory correction applied. Adjust result text to feed back to the ReAct loop
+                            result_text = (
+                                f"❌ Skill Failed: {result.error}\n"
+                                f"[SRE Kernel Diagnostic]: {heal_result['diagnosis']}\n"
+                                f"[SRE Correction Injected]: {heal_result['patch_content']}"
+                            )
+                    else:
+                        update_span(tool_span_id, status="success", output=result_text, completed_at=datetime.utcnow().isoformat())
+                    
+                    # Track files created
                     if skill_name == "file_write" and result.success:
-                        # Extract file path from the result message
-                        # Message format: "✅ Successfully wrote X characters to path/to/file"
                         import re
                         match = re.search(r'wrote \d+ characters to (.+)$', str(result.output))
                         if match:
@@ -349,8 +494,7 @@ I'll use my available tools to complete this task autonomously."""
                         metadata={"tool_call_id": tool_call.get("id")}
                     )
                 
-                # After executing ALL tool calls in this turn, ask the agent
-                # to synthesize — but ONLY if at least one tool actually ran.
+                # Request synthesis
                 if any(s.step_type == "action" for s in agent_task.steps[-len(response.tool_calls)*3:]):
                     self.memory.working.add_message(
                         "user",
@@ -359,14 +503,13 @@ I'll use my available tools to complete this task autonomously."""
                         "Do NOT call any more tools unless the information is genuinely missing."
                     )
                 
-                # Continue the loop to process tool results
+                update_span(iter_span_id, status="success", completed_at=datetime.utcnow().isoformat())
                 continue
             
             else:
-                # No tool calls means the agent is done
+                # Task finished successfully
                 self.status = AgentStatus.REFLECTING
                 
-                # Reflection step
                 reflection = ThoughtStep(
                     step_type="reflection",
                     content="Task complete. Storing experience in memory."
@@ -374,7 +517,6 @@ I'll use my available tools to complete this task autonomously."""
                 agent_task.add_step(reflection)
                 self._emit_thought(reflection)
                 
-                # Store this experience in episodic memory
                 self.memory.episodic.store(
                     content=f"Task: {task}\nOutcome: {response.content[:500]}",
                     summary=f"Completed task: {task[:100]}",
@@ -387,41 +529,24 @@ I'll use my available tools to complete this task autonomously."""
                 agent_task.status = "completed"
                 agent_task.completed_at = datetime.utcnow().isoformat()
                 self.status = AgentStatus.IDLE
+                
+                # Complete Pod, Trace, Spans
+                update_pod(self.pod_id, status="completed")
+                update_trace(self.trace_id, status="completed", completed_at=datetime.utcnow().isoformat())
+                update_span(iter_span_id, status="success", completed_at=datetime.utcnow().isoformat())
+                update_span(root_span_id, status="success", completed_at=datetime.utcnow().isoformat())
                 return agent_task
         
-        # Max iterations reached — try to compile a final answer from what was gathered
-        # Collect all observation content seen so far
-        observations = [
-            step.content for step in agent_task.steps
-            if step.step_type == "observation" and step.content
-        ]
-        if observations:
-            # Ask the LLM to synthesize a final answer from all observations
-            try:
-                synth_messages = self.memory.working.get_llm_messages()
-                synth_messages.append({
-                    "role": "user",
-                    "content": (
-                        "You have now gathered enough information. "
-                        "Please synthesize all the tool results above into a clear, well-formatted final answer. "
-                        "Do NOT use any more tools."
-                    )
-                })
-                synth_response = self.llm.complete(
-                    synth_messages,
-                    tools=None,  # No tools — force a text answer
-                    temperature=self.persona.creativity
-                )
-                final_answer = synth_response.content
-            except Exception:
-                final_answer = "\n\n".join(observations[:5])
-        else:
-            final_answer = "I was unable to find sufficient information to complete this task."
-
+        # Max iterations reached
+        final_answer = "I was unable to complete the task within the maximum iteration limit."
         agent_task.status = "completed"
         agent_task.result = final_answer
         agent_task.completed_at = datetime.utcnow().isoformat()
         self.status = AgentStatus.IDLE
+        
+        update_pod(self.pod_id, status="completed")
+        update_trace(self.trace_id, status="completed", completed_at=datetime.utcnow().isoformat())
+        update_span(root_span_id, status="success", completed_at=datetime.utcnow().isoformat())
         return agent_task
     
     def learn(self, fact: str, topic: str = "user_provided", importance: float = 0.8):

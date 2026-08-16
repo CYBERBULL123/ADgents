@@ -187,3 +187,4 @@ cython_debug/
 # Data / ADgents Specific
 data/
 *.log
+.agents
