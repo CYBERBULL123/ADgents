@@ -1756,39 +1756,7 @@ async def api_get_trace(trace_id: str):
 
 # ─── Plugins & Marketplace Endpoints ─────────────────────────────────────────
 
-from core.plugin_db import list_plugins, connect_plugin, disconnect_plugin
-from core.plugin_manager import register_active_plugin_tools
-
-@app.get("/api/plugins")
-async def api_list_plugins():
-    """List all workspace plugins and their connection states."""
-    try:
-        plugins = list_plugins()
-        return {"success": True, "plugins": plugins}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/plugins/{plugin_id}/connect")
-async def api_connect_plugin(plugin_id: str, config: dict):
-    """Save config and connect a plugin, reloading skill registry."""
-    try:
-        plugin = connect_plugin(plugin_id, config)
-        # Reload registered tools dynamically!
-        register_active_plugin_tools()
-        return {"success": True, "plugin": plugin}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@app.post("/api/plugins/{plugin_id}/disconnect")
-async def api_disconnect_plugin(plugin_id: str):
-    """Disconnect a plugin and clear its registered tools."""
-    try:
-        plugin = disconnect_plugin(plugin_id)
-        # Reload registered tools dynamically!
-        register_active_plugin_tools()
-        return {"success": True, "plugin": plugin}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+# Plugin / integration endpoints removed: integrations are disabled in this deployment.
 
 # ─── IDE Gateway Refactoring Endpoint ───────────────────────────────────────
 

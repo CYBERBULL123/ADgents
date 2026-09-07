@@ -32,7 +32,7 @@ function navigate(page) {
         chat: ['Chat', 'Converse with your agents'],
         tasks: ['Tasks', 'Run autonomous workflows'],
         agentos: ['🪐 Agent OS Cluster', 'Containerized runtimes, observability traces, and self-healing logs'],
-        marketplace: ['🔌 Connected Integration Marketplace', 'Link slack, github, and email notifications to your agents'],
+        // marketplace entry removed
         history: ['Task History', 'Browse all past autonomous task runs'],
         memory: ['Memory', "View and manage agents' memories"],
         skills: ['Skills', 'Tools available to your agents'],
@@ -57,9 +57,7 @@ function navigate(page) {
         refreshPods();
         loadTracesList();
     }
-    if (page === 'marketplace') {
-        loadPluginsList();
-    }
+    // marketplace removed
 
     if (page === 'crews') loadCrewsPage();
     if (page === 'history') loadHistory();
@@ -3481,94 +3479,14 @@ function toggleSpanBody(spanId) {
 
 /* ─── Marketplace & Plugins UI Logic ─────────────────────────────────────── */
 
-let marketplacePlugins = []; // Cache list of plugins
-
+// Integrations and marketplace removed — functions are no-ops to keep UI stable.
+let marketplacePlugins = [];
 async function loadPluginsList() {
-    try {
-        const res = await api('/plugins');
-        if (!res.success) throw new Error(res.error || 'Failed to fetch plugins');
-        
-        marketplacePlugins = res.plugins || [];
-        
-        marketplacePlugins.forEach(p => {
-            const badge = document.getElementById(`plugin-badge-${p.plugin_id}`);
-            const card = document.getElementById(`plugin-card-${p.plugin_id}`);
-            const discBtn = document.getElementById(`plugin-disconnect-btn-${p.plugin_id}`);
-            
-            if (badge) {
-                if (p.status === 'connected') {
-                    badge.textContent = 'Connected';
-                    badge.className = 'badge badge-green';
-                    if (discBtn) discBtn.style.display = 'inline-block';
-                    if (card) card.style.borderColor = 'rgba(16, 185, 129, 0.4)';
-                } else {
-                    badge.textContent = 'Disconnected';
-                    badge.className = 'badge badge-gray';
-                    if (discBtn) discBtn.style.display = 'none';
-                    if (card) card.style.borderColor = 'var(--border)';
-                }
-            }
-        });
-    } catch (e) {
-        console.error('[Marketplace] Error loading plugins:', e);
-    }
+    return [];
 }
 
 function openConnectModal(pluginId) {
-    const p = marketplacePlugins.find(x => x.plugin_id === pluginId);
-    if (!p) return;
-    
-    document.getElementById('connect-plugin-id').value = pluginId;
-    document.getElementById('connect-modal-title').textContent = `Configure ${p.name}`;
-    
-    const fieldsContainer = document.getElementById('connect-modal-fields');
-    if (!fieldsContainer) return;
-    
-    let fieldsHtml = '';
-    const cfg = p.config || {};
-    
-    if (pluginId === 'github') {
-        fieldsHtml = `
-            <div class="form-group" style="margin-bottom: 1rem;">
-                <label>GitHub Personal Access Token (PAT)</label>
-                <input type="password" id="github-token" class="form-input" placeholder="ghp_..." value="${cfg.token || ''}" style="width:100%" />
-                <span style="font-size:0.75rem; color:var(--text-muted);">We need read/write repository permission to perform commits and PRs.</span>
-            </div>
-            <div class="form-group">
-                <label>Default Repository (format: owner/repo)</label>
-                <input type="text" id="github-repo" class="form-input" placeholder="e.g. facebook/react" value="${cfg.repository || ''}" style="width:100%" />
-            </div>
-        `;
-    } else if (pluginId === 'slack') {
-        fieldsHtml = `
-            <div class="form-group" style="margin-bottom: 1rem;">
-                <label>Slack Incoming Webhook URL</label>
-                <input type="password" id="slack-webhook" class="form-input" placeholder="https://hooks.slack.com/services/..." value="${cfg.webhook_url || ''}" style="width:100%" />
-            </div>
-            <div class="form-group">
-                <label>Default Notification Channel</label>
-                <input type="text" id="slack-channel" class="form-input" placeholder="e.g. dev-alerts" value="${cfg.channel || ''}" style="width:100%" />
-            </div>
-        `;
-    } else if (pluginId === 'email') {
-        fieldsHtml = `
-            <div class="form-group" style="margin-bottom: 1rem;">
-                <label>SMTP Server Address</label>
-                <input type="text" id="email-smtp" class="form-input" value="${cfg.smtp_server || 'smtp.gmail.com'}" style="width:100%" />
-            </div>
-            <div class="form-group" style="margin-bottom: 1rem;">
-                <label>Sender Email Address</label>
-                <input type="text" id="email-sender" class="form-input" placeholder="agent@gmail.com" value="${cfg.sender_email || ''}" style="width:100%" />
-            </div>
-            <div class="form-group">
-                <label>SMTP Account Password / App Key</label>
-                <input type="password" id="email-password" class="form-input" placeholder="Your app password" value="${cfg.password || ''}" style="width:100%" />
-            </div>
-        `;
-    }
-    
-    fieldsContainer.innerHTML = fieldsHtml;
-    document.getElementById('marketplace-modal-overlay').style.display = 'flex';
+    toast('Integrations are disabled in this deployment.', 'info');
 }
 
 function closeConnectModal() {
@@ -3577,53 +3495,9 @@ function closeConnectModal() {
 
 async function submitConnectPlugin(event) {
     event.preventDefault();
-    const pluginId = document.getElementById('connect-plugin-id').value;
-    
-    let config = {};
-    if (pluginId === 'github') {
-        config = {
-            token: document.getElementById('github-token').value.trim(),
-            repository: document.getElementById('github-repo').value.trim()
-        };
-    } else if (pluginId === 'slack') {
-        config = {
-            webhook_url: document.getElementById('slack-webhook').value.trim(),
-            channel: document.getElementById('slack-channel').value.trim()
-        };
-    } else if (pluginId === 'email') {
-        config = {
-            smtp_server: document.getElementById('email-smtp').value.trim(),
-            sender_email: document.getElementById('email-sender').value.trim(),
-            password: document.getElementById('email-password').value.trim()
-        };
-    }
-    
-    try {
-        const res = await api(`/plugins/${pluginId}/connect`, 'POST', config);
-        if (res.success) {
-            toast(`🔌 ${pluginId.toUpperCase()} Connected Successfully!`, 'success');
-            closeConnectModal();
-            loadPluginsList();
-        } else {
-            toast(res.error || 'Connection failed', 'error');
-        }
-    } catch (e) {
-        toast(e.message, 'error');
-    }
+    toast('Integrations are disabled. Connection not supported.', 'error');
 }
 
 async function disconnectPluginAndUI(pluginId) {
-    confirmAction(`Disconnect the ${pluginId.toUpperCase()} integration? Active credentials will be deleted.`, async () => {
-        try {
-            const res = await api(`/plugins/${pluginId}/disconnect`, 'POST');
-            if (res.success) {
-                toast(`Disconnected ${pluginId.toUpperCase()}`, 'info');
-                loadPluginsList();
-            } else {
-                toast(res.error || 'Failed to disconnect', 'error');
-            }
-        } catch (e) {
-            toast(e.message, 'error');
-        }
-    });
+    toast('Integrations are disabled in this deployment.', 'info');
 }
