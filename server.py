@@ -1541,6 +1541,17 @@ async def get_crew_communications(crew_id: str):
         return {"success": False, "error": str(e)}
 
 
+@app.delete("/api/a2a/communications/{crew_id}")
+async def delete_crew_communications(crew_id: str):
+    """Delete all communications for a crew (clear history/results)."""
+    try:
+        crew_mgr = get_crew_manager()
+        deleted_count = crew_mgr.clear_crew_communications(crew_id)
+        return {"success": True, "deleted": deleted_count}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/api/a2a/communications/agent/{agent_id}")
 async def get_agent_communications(agent_id: str):
     """Get all communications for a specific agent."""
@@ -1644,6 +1655,7 @@ from core.trace_db import (
     list_pods, get_pod as db_get_pod, update_pod as db_update_pod, 
     list_traces, get_trace as db_get_trace, get_trace_spans, 
     list_healing_interventions, create_trace, create_span, update_span, update_trace
+    , delete_pod
 )
 
 class ChatCompletionMessage(BaseModel):
@@ -1704,6 +1716,20 @@ async def stop_pod(pod_id: str):
     if not pod:
         raise HTTPException(404, f"Pod '{pod_id}' not found")
     return {"success": True, "message": f"Pod '{pod_id}' stopped successfully.", "status": pod["status"]}
+
+
+@app.delete("/api/pods/{pod_id}")
+async def delete_pod_endpoint(pod_id: str):
+    """Delete a pod and its kernel records (traces, spans, healing interventions)."""
+    try:
+        deleted = delete_pod(pod_id)
+        if not deleted:
+            raise HTTPException(404, f"Pod '{pod_id}' not found or could not be deleted")
+        return {"success": True, "message": f"Pod '{pod_id}' deleted."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 @app.get("/api/obs/traces")
 async def api_list_traces(pod_id: Optional[str] = None, limit: int = 50):

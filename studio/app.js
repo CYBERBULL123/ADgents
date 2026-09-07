@@ -2675,23 +2675,21 @@ async function addCrewMember() {
 }
 
 async function deleteCrew(crewId) {
-    if (!confirm('Are you sure you want to delete this crew? This action cannot be undone.')) {
-        return;
-    }
-    
-    try {
-        const data = await api(`/crews/${crewId}`, 'DELETE');
-        
-        if (data.success) {
-            toast('Crew deleted successfully!', 'success');
-            // Reload page
-            loadCrewsPage();
-        } else {
-            toast(data.error || 'Failed to delete crew', 'error');
+    confirmAction('Are you sure you want to delete this crew? This action cannot be undone.', async () => {
+        try {
+            const data = await api(`/crews/${crewId}`, 'DELETE');
+
+            if (data.success) {
+                toast('Crew deleted successfully!', 'success');
+                // Reload page
+                loadCrewsPage();
+            } else {
+                toast(data.error || 'Failed to delete crew', 'error');
+            }
+        } catch (e) {
+            toast('Failed to delete crew: ' + e.message, 'error');
         }
-    } catch (e) {
-        toast('Failed to delete crew: ' + e.message, 'error');
-    }
+    });
 }
 
 async function loadCrewCommunications() {
@@ -2758,7 +2756,7 @@ async function loadCrewCommunications() {
                             </span>
                         </div>
                         <div style="color: var(--text-primary); line-height: 1.5; word-wrap: break-word; white-space: pre-wrap;">
-                            ${escapeHtml(contentText)}
+                            ${renderMarkdown(contentText)}
                         </div>
                     </div>
                 `;
@@ -2792,6 +2790,29 @@ function switchCrewTab(tab) {
 function refreshCrewTabs() {
     loadCrewCommunications();
     loadCrewResults();
+}
+
+async function clearCrewHistoryAndResults() {
+    const crewId = document.getElementById('view-comm-crew').value.trim();
+    if (!crewId) {
+        toast('Please select a crew to clear', 'error');
+        return;
+    }
+    confirmAction('Are you sure you want to clear ALL communications and results for this crew? This cannot be undone.', async () => {
+        try {
+            const res = await api(`/a2a/communications/${crewId}`, 'DELETE');
+            if (res && res.success) {
+                toast(`Cleared ${res.deleted || 0} messages for crew`, 'success');
+                // Refresh both tabs
+                await refreshCrewTabs();
+            } else {
+                toast('Failed to clear communications: ' + (res.error || 'unknown'), 'error');
+            }
+        } catch (e) {
+            console.error('Error clearing crew communications:', e);
+            toast('Error: ' + e.message, 'error');
+        }
+    });
 }
 
 // ── Results tab ─────────────────────────────────────────────────────────────
@@ -2861,10 +2882,10 @@ async function loadCrewResults() {
                     ${originalText ? `
                     <div style="background: var(--bg-secondary); border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; color: var(--text-secondary); border-left: 2px solid var(--border-color);">
                         <span style="font-weight: 600; display: block; margin-bottom: 2px;">💬 Original query</span>
-                        ${escapeHtml(originalText)}
+                        ${renderMarkdown(originalText)}
                     </div>` : ''}
                     <div style="color: var(--text-primary); line-height: 1.6; white-space: pre-wrap; font-size: 13px;">
-                        ${escapeHtml(queryText)}
+                        ${renderMarkdown(queryText)}
                     </div>
                 </div>
             `;
@@ -3148,6 +3169,7 @@ async function refreshPods() {
                         ${(p.status === 'running' || p.status === 'healing') ? `<button class="btn btn-ghost btn-xs" style="flex:1" onclick="suspendPod('${p.id}')">⏸️ Suspend</button>` : ''}
                         ${p.status === 'suspended' ? `<button class="btn btn-ghost btn-xs" style="flex:1" onclick="resumePod('${p.id}')">▶️ Resume</button>` : ''}
                         ${(p.status === 'running' || p.status === 'healing' || p.status === 'suspended') ? `<button class="btn btn-danger btn-xs" style="padding: 0.25rem 0.6rem; border-radius: var(--radius-xs);" onclick="stopPod('${p.id}')">🛑 Stop</button>` : ''}
+                        ${(p.status === 'completed' || p.status === 'stopped' || p.status === 'failed') ? `<button class="btn btn-danger btn-xs" style="padding: 0.25rem 0.6rem; border-radius: var(--radius-xs);" onclick="confirmDeletePod('${p.id}')">🗑️ Delete</button>` : ''}
                     </div>
                 </div>
             `;
@@ -3197,6 +3219,23 @@ async function stopPod(podId) {
     } catch(e) {
         toast(e.message, 'error');
     }
+}
+
+function confirmDeletePod(podId) {
+    confirmAction('Delete this pod and all its traces? This cannot be undone.', async () => {
+        try {
+            const res = await api(`/pods/${podId}`, 'DELETE');
+            if (res.success) {
+                toast('Pod deleted', 'info');
+                refreshPods();
+                loadTracesList();
+            } else {
+                throw new Error(res.error || 'Failed to delete pod');
+            }
+        } catch (e) {
+            toast(e.message || 'Error deleting pod', 'error');
+        }
+    });
 }
 
 async function launchPod() {

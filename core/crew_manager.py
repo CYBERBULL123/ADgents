@@ -407,6 +407,19 @@ class CrewManager:
             if comm["from"] == agent_id or comm["to"] == agent_id
         ]
 
+    def clear_crew_communications(self, crew_id: str) -> int:
+        """Remove all communications for a specific crew and persist changes.
+
+        Returns the number of deleted communications.
+        """
+        to_delete = [cid for cid, comm in self.active_communications.items() if comm.get('crew_id') == crew_id]
+        for cid in to_delete:
+            del self.active_communications[cid]
+        if to_delete:
+            self._save_communications()
+            logger.info(f"✓ Cleared {len(to_delete)} communications for crew {crew_id}")
+        return len(to_delete)
+
     # ─── Persistence ────────────────────────────────────────────────────────
 
     def _load_communications(self):

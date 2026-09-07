@@ -284,5 +284,39 @@ def list_healing_interventions(pod_id: Optional[str] = None) -> List[Dict[str, A
     return [dict(r) for r in rows]
 
 
+def delete_pod(pod_id: str) -> bool:
+    """Delete a pod and its associated traces/spans/healing records.
+
+    Returns True if a row was deleted, False otherwise.
+    """
+    with _get_conn() as conn:
+        try:
+            # Start a transaction
+            conn.execute('BEGIN')
+
+            # Delete healing interventions referencing this pod
+            conn.execute("DELETE FROM healing_interventions WHERE pod_id = ?", (pod_id,))
+
+            # Find traces for this pod
+            trace_rows = conn.execute("SELECT id FROM traces WHERE pod_id = ?", (pod_id,)).fetchall()
+            trace_ids = [r['id'] for r in trace_rows]
+
+            # Delete spans for those traces
+            if trace_ids:
+                conn.executemany("DELETE FROM spans WHERE trace_id = ?", [(tid,) for tid in trace_ids])
+
+            # Delete traces
+            conn.execute("DELETE FROM traces WHERE pod_id = ?", (pod_id,))
+
+            # Finally delete the pod
+            cur = conn.execute("DELETE FROM pods WHERE id = ?", (pod_id,))
+
+            conn.commit()
+            return cur.rowcount > 0
+        except Exception:
+            conn.rollback()
+            raise
+
+
 # Initialize on load
 init_db()

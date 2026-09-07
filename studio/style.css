@@ -3635,6 +3635,16 @@ textarea {
   color: var(--text-secondary);
 }
 
+/* Tighter markdown spacing inside crew panels */
+.crews-panel-body .md-content,
+.crews-panel-body .md-bubble {
+  line-height: 1.45;
+}
+.crews-panel-body .md-content p,
+.crews-panel-body .md-bubble p {
+  margin-bottom: 0.45rem;
+}
+
 .crews-panel-empty {
   text-align: center;
   color: var(--text-muted);
