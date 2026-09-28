@@ -55,7 +55,6 @@ from core.agent_store import save_agent_persona, load_all_personas, delete_agent
 from core.task_db import save_task, list_tasks, get_task, delete_task, task_stats
 from core.a2a_protocol import A2AProtocolManager, get_a2a_manager, A2AMessage
 from core.mcp_server import MCPServer
-from core.crew_manager import get_crew_manager
 
 
 # ─── Logger Setup ─────────────────────────────────────────────────────────────
@@ -221,40 +220,8 @@ async def _agent_auto_reply(
     receiver_name: str,
     message_text: str,
 ):
-    """
-    Background task: the receiving agent reads the message and replies autonomously
-    using the built-in ReAct LLM agent (agent.think).
-    """
-    try:
-        crew_mgr = get_crew_manager()
-
-        receiver_agent = agents.get(receiver_id)
-        if not receiver_agent:
-            logger.info(f"[A2A] Agent {receiver_id} not in registry – skipping auto-reply")
-            return
-
-        context = f"[A2A Message from {sender_name}]: {message_text}"
-
-        response_text = await asyncio.get_event_loop().run_in_executor(
-            None, receiver_agent.think, context
-        )
-
-        if not response_text:
-            return
-
-        await crew_mgr.send_message_between_agents(
-            crew_id=crew_id,
-            from_agent=receiver_id,
-            to_agent=sender_id,
-            message={"text": response_text, "type": "text"},
-            from_name=receiver_name,
-            to_name=sender_name,
-            message_type="response",
-        )
-        logger.info(f"[A2A] ✓ Auto-reply: {receiver_name} → {sender_name}")
-
-    except Exception as e:
-        logger.error(f"[A2A] Auto-reply error: {e}")
+    """A2A auto-reply disabled: crew features removed."""
+    logger.info("[A2A] Auto-reply disabled: crew features are removed in this deployment.")
 
 
 # ─── Agent Management ─────────────────────────────────────────────────────────
@@ -1329,326 +1296,51 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str):
 
 # ─── Agent Templates ──────────────────────────────────────────────────────────
 
-@app.post("/api/templates/create")
-async def create_template(req: CreateTemplateRequest):
-    """Create an agent template."""
-    try:
-        crew_mgr = get_crew_manager()
-        template = crew_mgr.create_template(
-            name=req.name,
-            description=req.description,
-            role=req.role,
-            expertise=req.expertise,
-            skills=req.skills,
-            instructions=req.instructions,
-            model=req.model
-        )
-        return {
-            "success": True,
-            "template": template.to_dict(),
-            "message": f"Template created: {req.name}"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
 @app.get("/api/templates")
-async def list_templates():
-    """List all agent templates."""
-    try:
-        crew_mgr = get_crew_manager()
-        templates = crew_mgr.get_templates()
-        return {
-            "success": True,
-            "templates": [t.to_dict() for t in templates],
-            "count": len(templates)
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.get("/api/templates/{template_id}")
-async def get_template(template_id: str):
-    """Get a specific template."""
-    try:
-        crew_mgr = get_crew_manager()
-        template = crew_mgr.get_template(template_id)
-        if not template:
-            raise HTTPException(404, "Template not found")
-        return {
-            "success": True,
-            "template": template.to_dict()
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.delete("/api/templates/{template_id}")
-async def delete_template(template_id: str):
-    """Delete a template."""
-    try:
-        crew_mgr = get_crew_manager()
-        if crew_mgr.delete_template(template_id):
-            return {"success": True, "message": "Template deleted"}
-        return {"success": False, "error": "Template not found"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+async def templates_disabled():
+    """Templates API disabled: related crew features removed."""
+    return {"success": False, "error": "Template & organization features have been removed in this deployment."}
 
 
 # ─── Organizations ────────────────────────────────────────────────────────────
 
-@app.post("/api/organizations/create")
-async def create_organization(req: CreateOrganizationRequest):
-    """Create a new organization."""
-    try:
-        crew_mgr = get_crew_manager()
-        org = crew_mgr.create_organization(req.name, req.description)
-        return {
-            "success": True,
-            "organization": org,
-            "message": f"Organization created: {req.name}"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
 @app.get("/api/organizations")
-async def list_organizations():
-    """List all organizations."""
-    try:
-        crew_mgr = get_crew_manager()
-        orgs = crew_mgr.list_organizations()
-        return {
-            "success": True,
-            "organizations": orgs,
-            "count": len(orgs)
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.get("/api/organizations/{org_id}")
-async def get_organization(org_id: str):
-    """Get organization details and statistics."""
-    try:
-        crew_mgr = get_crew_manager()
-        org = crew_mgr.get_organization(org_id)
-        if not org:
-            raise HTTPException(404, "Organization not found")
-        
-        stats = crew_mgr.get_organization_stats(org_id)
-        
-        return {
-            "success": True,
-            "organization": org,
-            "statistics": stats
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+async def organizations_disabled():
+    return {"success": False, "error": "Organization features removed with Crews."}
 
 
 # ─── Agent-to-Agent (A2A) Protocol ────────────────────────────────────────────
 
 @app.post("/api/a2a/send")
-async def send_a2a_message(req: SendA2AMessageRequest, background_tasks: BackgroundTasks):
-    """Send a message between two agents via A2A protocol and trigger autonomous reply."""
-    try:
-        crew_mgr = get_crew_manager()
-
-        crew = crew_mgr.get_crew(req.crew_id)
-        if not crew:
-            return {"success": False, "error": "Crew not found"}
-
-        agent_ids = {m.agent_id for m in crew.members}
-        if req.from_agent not in agent_ids or req.to_agent not in agent_ids:
-            return {"success": False, "error": "Agent not in crew"}
-
-        # Resolve human-readable names
-        from_member = next((m for m in crew.members if m.agent_id == req.from_agent), None)
-        to_member = next((m for m in crew.members if m.agent_id == req.to_agent), None)
-        from_name = from_member.agent_name if from_member else req.from_agent[:8]
-        to_name = to_member.agent_name if to_member else req.to_agent[:8]
-
-        result = await crew_mgr.send_message_between_agents(
-            crew_id=req.crew_id,
-            from_agent=req.from_agent,
-            to_agent=req.to_agent,
-            message=req.content,
-            from_name=from_name,
-            to_name=to_name,
-            message_type=req.message_type,
-        )
-
-        # Trigger receiving agent to reply autonomously in background
-        message_text = req.content.get("text", str(req.content)) if isinstance(req.content, dict) else str(req.content)
-        background_tasks.add_task(
-            _agent_auto_reply,
-            req.crew_id, req.to_agent, req.from_agent,
-            from_name, to_name, message_text,
-        )
-
-        return result
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+async def send_a2a_message_disabled(req: SendA2AMessageRequest):
+    return {"success": False, "error": "A2A messaging disabled: crew features removed."}
 
 
 @app.post("/api/a2a/broadcast")
-async def broadcast_a2a_message(req: BroadcastA2AMessageRequest, background_tasks: BackgroundTasks):
-    """Broadcast a message to all agents in a crew and trigger autonomous replies."""
-    try:
-        crew_mgr = get_crew_manager()
-
-        crew = crew_mgr.get_crew(req.crew_id)
-        if not crew:
-            return {"success": False, "error": "Crew not found"}
-
-        from_member = next((m for m in crew.members if m.agent_id == req.from_agent), None)
-        from_name = from_member.agent_name if from_member else req.from_agent[:8]
-
-        result = await crew_mgr.broadcast_to_crew(
-            crew_id=req.crew_id,
-            from_agent=req.from_agent,
-            message=req.content,
-        )
-
-        # Each receiving agent replies autonomously
-        message_text = req.content.get("text", str(req.content)) if isinstance(req.content, dict) else str(req.content)
-        for member in crew.members:
-            if member.agent_id != req.from_agent:
-                background_tasks.add_task(
-                    _agent_auto_reply,
-                    req.crew_id, member.agent_id, req.from_agent,
-                    from_name, member.agent_name, message_text,
-                )
-
-        return result
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+async def broadcast_a2a_message_disabled(req: BroadcastA2AMessageRequest):
+    return {"success": False, "error": "A2A broadcast disabled: crew features removed."}
 
 
 @app.get("/api/a2a/communications/{crew_id}")
-async def get_crew_communications(crew_id: str):
-    """Get all communications in a crew."""
-    try:
-        crew_mgr = get_crew_manager()
-        comms = crew_mgr.get_crew_communications(crew_id)
-        return {
-            "success": True,
-            "communications": comms,
-            "count": len(comms)
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+async def get_crew_communications_disabled(crew_id: str):
+    return {"success": False, "error": "Crew communications disabled."}
 
 
 @app.delete("/api/a2a/communications/{crew_id}")
-async def delete_crew_communications(crew_id: str):
-    """Delete all communications for a crew (clear history/results)."""
-    try:
-        crew_mgr = get_crew_manager()
-        deleted_count = crew_mgr.clear_crew_communications(crew_id)
-        return {"success": True, "deleted": deleted_count}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+async def delete_crew_communications_disabled(crew_id: str):
+    return {"success": False, "error": "Crew communications disabled."}
 
 
 @app.get("/api/a2a/communications/agent/{agent_id}")
-async def get_agent_communications(agent_id: str):
-    """Get all communications for a specific agent."""
-    try:
-        crew_mgr = get_crew_manager()
-        comms = crew_mgr.get_agent_communications(agent_id)
-        return {
-            "success": True,
-            "communications": comms,
-            "count": len(comms)
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+async def get_agent_communications_disabled(agent_id: str):
+    return {"success": False, "error": "Crew communications disabled."}
 
 # ─── Crew Management Endpoints ────────────────────────────────────────────────
 
-@app.post("/api/crews/create")
-async def create_crew(req: CreateCrewRequest):
-    """Create a new crew."""
-    try:
-        crew_mgr = get_crew_manager()
-        crew = crew_mgr.create_crew(
-            name=req.name,
-            description=req.description,
-            organization=req.organization,
-            members=req.members,
-            communication_protocol=req.communication_protocol
-        )
-        return {
-            "success": True,
-            "crew": crew.to_dict(),
-            "message": f"Crew created: {req.name}"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
 @app.get("/api/crews")
-async def list_crews():
-    """List all crews."""
-    try:
-        crew_mgr = get_crew_manager()
-        crews = crew_mgr.list_crews()
-        return {
-            "success": True,
-            "crews": [c.to_dict() for c in crews],
-            "count": len(crews)
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.get("/api/crews/{crew_id}")
-async def get_crew(crew_id: str):
-    """Get a specific crew."""
-    try:
-        crew_mgr = get_crew_manager()
-        crew = crew_mgr.get_crew(crew_id)
-        if not crew:
-            raise HTTPException(404, "Crew not found")
-        return {
-            "success": True,
-            "crew": crew.to_dict()
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.post("/api/crews/{crew_id}/members")
-async def add_crew_member(crew_id: str, member_data: Dict[str, Any]):
-    """Add a member to a crew."""
-    try:
-        crew_mgr = get_crew_manager()
-        success = crew_mgr.add_member_to_crew(
-            crew_id=crew_id,
-            agent_id=member_data["agent_id"],
-            agent_name=member_data["agent_name"],
-            role=member_data.get("role", "contributor")
-        )
-        if not success:
-            return {"success": False, "error": "Failed to add member"}
-        return {"success": True, "message": "Member added to crew"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-
-@app.delete("/api/crews/{crew_id}")
-async def delete_crew(crew_id: str):
-    """Delete a crew."""
-    try:
-        crew_mgr = get_crew_manager()
-        success = crew_mgr.delete_crew(crew_id)
-        if not success:
-            return {"success": False, "error": "Crew not found"}
-        return {"success": True, "message": "Crew deleted successfully"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+async def crews_disabled():
+    """Crews API disabled: feature removed."""
+    return {"success": False, "error": "Crew features have been removed from this deployment."}
 # ─── Agent OS Observability & Monitoring Endpoints ──────────────────────────────
 
 from core.trace_db import (

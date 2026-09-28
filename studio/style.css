@@ -1771,81 +1771,11 @@ textarea {
 }
 
 /* ─── Task Result Panel ───────────────────────────────────────── */
-.task-result-panel {
-  margin-top: 1.5rem;
-  border-radius: var(--radius);
-  border: 1px solid rgba(16, 185, 129, 0.35);
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.06) 0%, rgba(6, 8, 17, 0.9) 60%);
-  backdrop-filter: blur(16px);
-  box-shadow: 0 0 40px rgba(16, 185, 129, 0.12), 0 8px 32px rgba(0, 0, 0, 0.4);
-  overflow: hidden;
-}
-
-@keyframes resultSlideUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.result-animate-in {
-  animation: resultSlideUp 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.task-result-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1rem 1.5rem;
-  background: linear-gradient(90deg, rgba(16, 185, 129, 0.12), transparent);
-  border-bottom: 1px solid rgba(16, 185, 129, 0.2);
-}
-
-.task-result-title {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-
-.task-result-icon {
-  font-size: 1.6rem;
-  filter: drop-shadow(0 0 8px rgba(16, 185, 129, 0.6));
-}
-
-.task-result-label {
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 1.2px;
-  color: var(--green);
-}
-
-.task-result-agent {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-top: 0.15rem;
-}
-
-.task-result-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.task-result-body {
-  padding: 1.5rem 1.75rem;
-  font-size: 0.92rem;
-  line-height: 1.75;
-  color: var(--text-primary);
-  max-height: 600px;
-  overflow-y: auto;
-}
-
+/* Crew page styling retained for archival but hidden: show only removal notice */
+#page-crews > .card { padding: 2rem; text-align: center; }
+#page-crews input[type=text]:focus,
+#page-crews textarea:focus,
+#page-crews select:focus { box-shadow: none; border-color: var(--border); }
 /* Enhance markdown inside the result panel */
 .task-result-body h1,
 .task-result-body h2,
