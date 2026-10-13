@@ -10,6 +10,7 @@ let state = {
     skills: [],
     templates: {},
     pendingTaskId: null,
+    chatActivity: null,
     selectedBuilderSkills: new Set(),
     selectedTemplate: null
 };
@@ -697,6 +698,7 @@ function renderChatPicker() {
 
 function selectChatAgent(id) {
     state.selectedChatAgent = id;
+    state.chatActivity = null;
     const agent = state.agents[id];
     if (!agent) return;
 
@@ -724,12 +726,23 @@ function connectWebSocket(agentId) {
 
     try {
         const ws = new WebSocket(`ws://localhost:8000/ws/${agentId}`);
-        ws.onopen = () => { state.ws = ws; };
+        ws.onopen = () => {
+            if (state.selectedChatAgent === agentId) state.ws = ws;
+            else ws.close();
+        };
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
             if (data.type === 'chat_response') {
                 removeThinkingBubble();
                 appendMessage('agent', data.response);
+                if (data.autonomous) finishChatActivity(data.status);
+                document.getElementById('chat-agent-status').innerHTML = `<span class="dot dot-green"></span> Ready`;
+            }
+            if (data.type === 'chat_step') appendChatProgressStep(data.step);
+            if (data.type === 'chat_error') {
+                removeThinkingBubble();
+                finishChatActivity('failed');
+                appendMessage('agent', `⚠️ Error: ${data.error || 'Autonomous chat failed'}`);
                 document.getElementById('chat-agent-status').innerHTML = `<span class="dot dot-green"></span> Ready`;
             }
             if (data.type === 'thought_step') {
@@ -744,7 +757,7 @@ function connectWebSocket(agentId) {
             }
         };
         ws.onerror = () => { state.ws = null; };
-        ws.onclose = () => { state.ws = null; };
+        ws.onclose = () => { if (state.ws === ws) state.ws = null; };
     } catch (e) { console.log('WS not available, using REST'); }
 }
 
@@ -766,21 +779,67 @@ async function sendMessage() {
     // Show thinking indicator
     appendThinkingBubble(agent?.persona?.avatar || '🤖');
 
+    const autonomous = document.getElementById('chat-autonomous')?.checked ?? true;
+    if (autonomous) beginChatActivity();
+
     // Try WebSocket first, fallback to REST
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-        state.ws.send(JSON.stringify({ type: 'chat', message: msg }));
+        state.ws.send(JSON.stringify({ type: 'chat', message: msg, autonomous }));
     } else {
         try {
-            const res = await api('/chat', 'POST', { agent_id: state.selectedChatAgent, message: msg });
+            const res = await api('/chat', 'POST', { agent_id: state.selectedChatAgent, message: msg, autonomous }, 180000);
             removeThinkingBubble();
+            if (res.autonomous) {
+                (res.steps || []).forEach(appendChatProgressStep);
+                finishChatActivity(res.status);
+            }
             appendMessage('agent', res.response);
             document.getElementById('chat-agent-status').innerHTML = `<span class="dot dot-green"></span> Ready`;
         } catch (e) {
             removeThinkingBubble();
+            if (autonomous) finishChatActivity('failed');
             appendMessage('agent', `⚠️ Error: ${e.message}`);
             document.getElementById('chat-agent-status').innerHTML = `<span class="dot dot-green"></span> Ready`;
         }
     }
+}
+
+function beginChatActivity() {
+    const container = document.getElementById('messages-container');
+    const panel = document.createElement('details');
+    panel.className = 'chat-activity';
+    panel.open = true;
+    panel.innerHTML = '<summary>Agent activity · running</summary><div class="chat-activity-steps"></div>';
+    container.appendChild(panel);
+    state.chatActivity = panel.querySelector('.chat-activity-steps');
+    container.scrollTop = container.scrollHeight;
+}
+
+function appendChatProgressStep(step) {
+    if (!state.chatActivity || !step) return;
+    const icons = { thought: '💭', action: '⚡', observation: '👁️', reflection: '🔮' };
+    const item = document.createElement('div');
+    item.className = `task-step ${step.step_type || 'thought'}`;
+    const content = step.content || '';
+    const safeContent = step.step_type === 'thought' || step.step_type === 'reflection'
+        ? renderMarkdown(content)
+        : escapeHtml(content);
+    const args = step.skill_args
+        ? `<pre class="chat-activity-args">${escapeHtml(JSON.stringify(step.skill_args, null, 2))}</pre>`
+        : '';
+    item.innerHTML = `<div class="step-header"><span>${icons[step.step_type] || '•'}</span><span class="step-type">${escapeHtml(step.step_type || 'thought')}</span></div>${step.skill_used ? `<div class="step-skill-badge">🔧 ${escapeHtml(step.skill_used)}</div>` : ''}${args}<div class="step-content md-content">${safeContent}</div>`;
+    state.chatActivity.appendChild(item);
+    const container = document.getElementById('messages-container');
+    container.scrollTop = container.scrollHeight;
+}
+
+function finishChatActivity(status = 'completed') {
+    const panel = state.chatActivity?.closest('.chat-activity');
+    if (panel) {
+        panel.querySelector('summary').textContent = `Agent activity · ${status || 'completed'}`;
+        panel.open = false;
+    }
+    state.chatActivity = null;
 }
 
 function handleChatKey(e) {
@@ -1162,10 +1221,27 @@ function renderFilesGrid(files) {
             <div class="file-actions">
                 ${canPreview ? `<button class="btn btn-sm btn-secondary" onclick="previewFile('${encodedPath}', '${escapeHtml(f.name).replace(/'/g, "\\'")}', '${f.extension}')">👁️ View</button>` : ''}
                 <a href="/api/files/download?path=${encodedPath}" download class="btn btn-sm btn-primary">⬇️ Download</a>
+                <button class="btn btn-sm btn-danger" data-file-path="${escapeHtml(f.path)}" data-file-name="${escapeHtml(f.name)}" onclick="deleteFile(this)">🗑️ Delete</button>
             </div>
         </div>
         `;
     }).join('');
+}
+
+function deleteFile(button) {
+    const path = button.dataset.filePath;
+    const name = button.dataset.fileName;
+    if (!path) return;
+
+    confirmAction(`Delete "${name}"? This cannot be undone.`, async () => {
+        try {
+            await api(`/files?path=${encodeURIComponent(path)}`, 'DELETE');
+            toast(`Deleted ${name}`, 'success');
+            await loadFiles();
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    });
 }
 
 async function previewFile(encodedPath, fileName, extension) {

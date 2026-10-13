@@ -1212,6 +1212,45 @@ textarea {
   margin-top: 0.5rem;
 }
 
+.chat-activity {
+  max-width: 92%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.7rem;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.chat-activity summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.chat-activity-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.7rem;
+}
+
+.chat-activity-steps .task-step {
+  padding: 0.75rem;
+}
+
+.chat-activity-args {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0.5rem 0;
+  padding: 0.6rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--text-secondary);
+  font: 0.75rem/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ─── Task Steps (original, kept for standalone) ─── */
 .task-steps {
   display: flex;

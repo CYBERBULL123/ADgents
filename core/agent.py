@@ -207,7 +207,7 @@ I'll use my available tools to complete this task autonomously."""
         if context:
             planning_prompt = f"[Relevant Memory]\n{context}\n\n{planning_prompt}"
         
-        self.memory.working.add_message("user", f"Please complete this task autonomously: {task}")
+        self.memory.working.add_message("user", planning_prompt)
         
         thought_step = ThoughtStep(
             step_type="thought",

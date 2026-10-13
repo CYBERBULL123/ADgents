@@ -426,6 +426,9 @@
                                 </button>
                             </div>
                             <div class="chat-actions">
+                                <label class="btn btn-ghost btn-xs" style="display:inline-flex;align-items:center;gap:.4rem;cursor:pointer">
+                                    <input id="chat-autonomous" type="checkbox" checked /> Autonomous replies
+                                </label>
                                 <button class="btn btn-ghost btn-xs" onclick="runAutonomousTask()">⚡ Run Task</button>
                                 <button class="btn btn-ghost btn-xs" onclick="resetChatSession()">🔄 New
                                     Session</button>
@@ -986,7 +989,7 @@
         </div>
     </div>
 
-    <script src="/studio/app.js?v=9"></script>
+    <script src="/studio/app.js?v=10"></script>
 </body>
 
 </html>

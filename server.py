@@ -77,6 +77,7 @@ class CreateAgentRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     agent_id: str
+    autonomous: bool = False
 
 class TaskRequest(BaseModel):
     task: str
@@ -343,11 +344,22 @@ async def reset_agent(agent_id: str):
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    """Simple chat with an agent."""
+    """Chat with an agent, optionally using its autonomous ReAct loop."""
     agent = agents.get(req.agent_id)
     if not agent:
         raise HTTPException(404, f"Agent '{req.agent_id}' not found")
-    
+
+    if req.autonomous:
+        task = await asyncio.to_thread(agent.run, req.message)
+        return {
+            "response": task.result or task.error or "The agent did not return a result.",
+            "agent": agent.name,
+            "timestamp": datetime.utcnow().isoformat(),
+            "autonomous": True,
+            "status": task.status,
+            "steps": [step.to_dict() for step in task.steps],
+        }
+
     response = agent.think(req.message)
     return {
         "response": response,
@@ -555,6 +567,30 @@ async def download_file(path: str):
         filename=file_path.name,
         media_type='application/octet-stream'
     )
+
+
+@app.delete("/api/files")
+async def delete_file(path: str):
+    """Delete a file, restricted to the agent files directory."""
+    files_dir = (Path(__file__).parent / "data" / "files").resolve()
+    requested_path = Path(path)
+    if requested_path.is_absolute():
+        try:
+            requested_path = requested_path.relative_to(Path(__file__).parent)
+        except ValueError:
+            raise HTTPException(400, "Invalid file path")
+
+    file_path = (Path(__file__).parent / requested_path).resolve()
+    try:
+        file_path.relative_to(files_dir)
+    except ValueError:
+        raise HTTPException(403, "Access denied")
+
+    if not file_path.is_file():
+        raise HTTPException(404, f"File not found: {path}")
+
+    file_path.unlink()
+    return {"success": True, "message": f"Deleted {file_path.name}"}
 
 
 @app.get("/api/files/list")
@@ -1277,13 +1313,70 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str):
             if msg_type == "chat":
                 agent = agents.get(agent_id)
                 if agent:
-                    response = agent.think(data.get("message", ""))
-                    await websocket.send_json({
-                        "type": "chat_response",
-                        "response": response,
-                        "agent": agent.name,
-                        "timestamp": datetime.utcnow().isoformat()
-                    })
+                    message = data.get("message", "")
+                    if data.get("autonomous"):
+                        async def run_autonomous_chat():
+                            loop = asyncio.get_running_loop()
+                            step_queue: asyncio.Queue = asyncio.Queue()
+                            task_id = str(uuid.uuid4())
+
+                            def on_thought(step: ThoughtStep):
+                                loop.call_soon_threadsafe(step_queue.put_nowait, step.to_dict())
+
+                            agent.on_thought(on_thought)
+                            try:
+                                await websocket.send_json({
+                                    "type": "chat_started",
+                                    "task_id": task_id,
+                                })
+                                task_future = loop.run_in_executor(
+                                    None, agent.run, message, None, task_id
+                                )
+                                while not task_future.done():
+                                    try:
+                                        step = await asyncio.wait_for(step_queue.get(), timeout=0.05)
+                                        await websocket.send_json({
+                                            "type": "chat_step",
+                                            "task_id": task_id,
+                                            "step": step,
+                                        })
+                                    except asyncio.TimeoutError:
+                                        continue
+
+                                task = await task_future
+                                while not step_queue.empty():
+                                    await websocket.send_json({
+                                        "type": "chat_step",
+                                        "task_id": task_id,
+                                        "step": step_queue.get_nowait(),
+                                    })
+                                await websocket.send_json({
+                                    "type": "chat_response",
+                                    "response": task.result or task.error or "The agent did not return a result.",
+                                    "agent": agent.name,
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                    "autonomous": True,
+                                    "status": task.status,
+                                    "task_id": task_id,
+                                })
+                            except Exception as e:
+                                await websocket.send_json({
+                                    "type": "chat_error",
+                                    "task_id": task_id,
+                                    "error": str(e),
+                                })
+                            finally:
+                                agent.on_thought(None)
+
+                        asyncio.create_task(run_autonomous_chat())
+                    else:
+                        response = agent.think(message)
+                        await websocket.send_json({
+                            "type": "chat_response",
+                            "response": response,
+                            "agent": agent.name,
+                            "timestamp": datetime.utcnow().isoformat()
+                        })
                 else:
                     await websocket.send_json({"type": "error", "message": "Agent not found"})
             
