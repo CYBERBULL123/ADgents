@@ -894,6 +894,29 @@ textarea {
   gap: 0.5rem;
 }
 
+.form-hint-inline {
+  margin-left: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+
+.builder-skill-help {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+#build-agent-skills-grid > .empty-state-small {
+  width: 100%;
+  padding: 0.75rem 0;
+}
+
 .skill-check-item {
   display: flex;
   align-items: center;
@@ -1505,6 +1528,73 @@ textarea {
 }
 
 /* ─── Skills Page ───────────────────────────────────────── */
+.capability-tabs {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  gap: 1.25rem;
+  padding: 0;
+  margin-bottom: 1.5rem;
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+}
+
+.capability-tab {
+  appearance: none;
+  -webkit-appearance: none;
+  min-height: 44px;
+  margin-bottom: -1px;
+  padding: 0.65rem 0.25rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  font-family: var(--font);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.capability-tab:hover {
+  color: var(--text-primary);
+}
+
+.capability-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+  background: transparent;
+}
+
+.capability-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.agent-skill-editor {
+  cursor: default;
+}
+
+.agent-skill-status {
+  min-height: 1.25rem;
+  margin-top: 0.75rem;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.agent-skill-status[data-type="success"] {
+  color: var(--green);
+}
+
+.agent-skill-status[data-type="error"] {
+  color: var(--red);
+}
+
+.agent-skill-card {
+  cursor: default;
+}
+
 .skills-section-label {
   font-size: 0.72rem;
   font-weight: 700;
@@ -1591,7 +1681,25 @@ textarea {
 /* Create Skill Panel */
 .skill-create-card {
   cursor: default;
-  margin-bottom: 0;
+  margin-bottom: 1.25rem;
+  padding: 1.25rem 1.5rem;
+}
+
+#page-tools .skills-grid-full {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+#page-tools .skill-card {
+  display: flex;
+  min-height: 150px;
+  flex-direction: column;
+  padding: 1.25rem;
+}
+
+#page-tools .skill-card-footer {
+  margin-top: auto;
+  padding-top: 0.75rem;
 }
 
 .skill-create-header {
@@ -1660,6 +1768,7 @@ textarea {
 .skill-form-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.75rem;
   margin-top: 1.25rem;
   padding-top: 1rem;
@@ -4566,4 +4675,26 @@ textarea {
   background: rgba(255, 255, 255, 0.05) !important;
   color: var(--text-secondary) !important;
   border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+@media (max-width: 520px) {
+  #page-tools .skills-grid-full {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .skill-form-actions > button {
+    flex: 1 1 auto;
+  }
+}
+
+@media (min-width: 521px) and (max-width: 900px) {
+  #page-tools .skills-grid-full {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 901px) and (max-width: 1200px) {
+  #page-tools .skills-grid-full {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }

@@ -1,10 +1,15 @@
-# Creating & Integrating Custom Skills
+# Agent Skills and Tools
 
-Learn how to create custom skills and extend agent capabilities.
+ADgents separates reusable agent instructions from executable actions:
 
-## What is a Skill?
+- **Agent Skills** are Markdown workflows. Create them in Studio under **Tools & Skills → Agent Skills**. They are included in autonomous task prompts and guide the agent through repeatable work.
+- **Tools** are callable functions with input schemas. Agents invoke them to search, read or write files, call APIs, and perform other actions. MCP clients discover these tools through the ADgents MCP server.
 
-A skill is a Python function that an agent can call to accomplish tasks. Skills give agents agency to:
+Agent Skills are stored as `data/agent_skills/<name>/SKILL.md`. A skill should describe when to use the workflow, its steps, constraints, and how to verify the result. Drafts can be generated with AI, then reviewed and edited before saving.
+
+## What Tools Do
+
+The executable tools give agents the ability to:
 
 - Execute code
 - Call APIs
@@ -13,7 +18,7 @@ A skill is a Python function that an agent can call to accomplish tasks. Skills 
 - Perform calculations
 - Process data
 
-## Built-in Skills
+## Built-in Tools
 
 ADgents comes with these skills ready to use:
 
@@ -30,9 +35,9 @@ ADgents comes with these skills ready to use:
 | `json_parse` | Parse JSON data | Parsed object |
 | `summarize_text` | Summarize text | Summary (str) |
 
-## Creating a Custom Skill
+## Creating a Custom Tool
 
-### Basic Skill Structure
+### Basic Tool Structure
 
 ```python
 from core.skills import register_skill

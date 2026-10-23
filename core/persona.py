@@ -27,6 +27,7 @@ class Persona:
     # Expertise & Domain
     expertise_domains: List[str] = field(default_factory=list)
     skills: List[str] = field(default_factory=list)  # built-in skills available
+    agent_skills: List[str] = field(default_factory=list)  # Markdown workflows assigned to this agent
     knowledge_focus: List[str] = field(default_factory=list)  # topics agent knows deeply
     
     # Goals & Values
@@ -94,6 +95,7 @@ Always respond in character as {self.name}. Be authentic, capable, and genuinely
             "backstory": self.backstory,
             "expertise_domains": self.expertise_domains,
             "skills": self.skills,
+            "agent_skills": self.agent_skills,
             "knowledge_focus": self.knowledge_focus,
             "primary_goals": self.primary_goals,
             "values": self.values,

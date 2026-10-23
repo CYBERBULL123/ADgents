@@ -14,6 +14,7 @@ from enum import Enum
 from .persona import Persona, PERSONA_TEMPLATES
 from .memory import AgentMemory
 from .skills import SkillRegistry, SKILL_REGISTRY, SkillResult
+from .agent_skills import get_agent_skill_context, get_assigned_agent_skills
 from .llm import LLMRouter, LLM_ROUTER, LLMResponse
 
 
@@ -102,13 +103,26 @@ class Agent:
     def _init_system_prompt(self):
         """Set the system prompt in working memory."""
         sys_prompt = self.persona.to_system_prompt()
-        sys_prompt += "\n\n## Available Skills\n"
+        sys_prompt += "\n\n## Available Tools\n"
         
         available_skills = self.skill_registry.list()
         filtered = [s for s in available_skills if s.name in (self.persona.skills or [s.name for s in available_skills])]
         
         for skill in filtered:
             sys_prompt += f"- **{skill.name}**: {skill.description}\n"
+
+        sys_prompt += "\n## Assigned Agent Skills (Markdown Workflows)\n"
+        assigned_agent_skills = get_assigned_agent_skills(self.persona.agent_skills)
+        if assigned_agent_skills:
+            for skill in assigned_agent_skills:
+                sys_prompt += f"- **{skill['name']}**: {skill['description']}\n"
+            sys_prompt += (
+                "When asked which Agent Skills you have, report only these assigned workflow names "
+                "and descriptions. Keep them distinct from your expertise domains and callable tools. "
+                "Do not invent additional workflows.\n"
+            )
+        else:
+            sys_prompt += "- None assigned. Do not claim to have Markdown Agent Skills.\n"
         
         self.memory.working.add_message("system", sys_prompt)
     
@@ -194,14 +208,26 @@ class Agent:
         from .plugin_db import get_plugin_context_string
         plugin_context = get_plugin_context_string()
         
-        planning_prompt = f"""I need to complete this task:
- 
-**Task**: {task}
- 
-I'll use my available tools to complete this task autonomously."""
+        planning_prompt = f"""Complete the user's task as an execution agent.
+
+    Task: {task}
+
+    Execution requirements:
+    - Identify the requested outcome and any essential missing information.
+    - Use available tools to perform actions; do not stop after promising to act.
+    - After each tool result, check whether it advanced the task. For recoverable errors, adjust the approach and retry within the iteration limit.
+    - Before reporting success, verify the requested outcome using tool results or other concrete evidence.
+    - Never claim an external action succeeded unless a tool confirmed it.
+    - If a required connector, permission, or capability is unavailable, state that blocker clearly instead of pretending the task is complete.
+    - If asked what Agent Skills you have, list the assigned Markdown workflows by their exact names and descriptions. Keep them distinct from expertise domains and callable tools.
+    - Give concise progress and results, not private chain-of-thought."""
         
         if plugin_context:
             planning_prompt = f"{plugin_context}\n\n{planning_prompt}"
+
+        agent_skill_context = get_agent_skill_context(self.persona.agent_skills)
+        if agent_skill_context:
+            planning_prompt = f"{planning_prompt}\n\n{agent_skill_context}"
             
         context = self.memory.get_relevant_context(task)
         if context:
@@ -498,9 +524,10 @@ I'll use my available tools to complete this task autonomously."""
                 if any(s.step_type == "action" for s in agent_task.steps[-len(response.tool_calls)*3:]):
                     self.memory.working.add_message(
                         "user",
-                        "Based on the tool results above, please provide a clear, comprehensive "
-                        "final answer to the original task. "
-                        "Do NOT call any more tools unless the information is genuinely missing."
+                        "Review the original task and the tool results. Verify that the requested "
+                        "outcome is actually achieved. If a requirement is still unmet or unverified, "
+                        "use the available tools to address it; otherwise provide a clear final answer "
+                        "that distinguishes verified results from limitations."
                     )
                 
                 update_span(iter_span_id, status="success", completed_at=datetime.utcnow().isoformat())
@@ -538,15 +565,16 @@ I'll use my available tools to complete this task autonomously."""
                 return agent_task
         
         # Max iterations reached
-        final_answer = "I was unable to complete the task within the maximum iteration limit."
-        agent_task.status = "completed"
+        final_answer = "I was unable to verify completion within the maximum iteration limit."
+        agent_task.status = "failed"
+        agent_task.error = final_answer
         agent_task.result = final_answer
         agent_task.completed_at = datetime.utcnow().isoformat()
-        self.status = AgentStatus.IDLE
+        self.status = AgentStatus.ERROR
         
-        update_pod(self.pod_id, status="completed")
-        update_trace(self.trace_id, status="completed", completed_at=datetime.utcnow().isoformat())
-        update_span(root_span_id, status="success", completed_at=datetime.utcnow().isoformat())
+        update_pod(self.pod_id, status="failed")
+        update_trace(self.trace_id, status="failed", completed_at=datetime.utcnow().isoformat())
+        update_span(root_span_id, status="error", error=final_answer, completed_at=datetime.utcnow().isoformat())
         return agent_task
     
     def learn(self, fact: str, topic: str = "user_provided", importance: float = 0.8):

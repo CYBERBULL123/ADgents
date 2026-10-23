@@ -48,6 +48,7 @@ _load_env_file()
 from core.agent import Agent, AgentFactory, AgentTask, ThoughtStep, AGENT_FACTORY
 from core.persona import Persona, PERSONA_TEMPLATES
 from core.skills import SKILL_REGISTRY, Skill
+from core.agent_skills import AGENT_SKILL_STORE
 from core.llm import LLM_ROUTER
 from core.memory import AgentMemory
 from core.memory import AgentMemory
@@ -106,6 +107,15 @@ class RegisterSkillRequest(BaseModel):
     handler_code: str
 
 class GenerateSkillRequest(BaseModel):
+    description: str
+
+class AgentSkillRequest(BaseModel):
+    name: str
+    description: str
+    content: str
+
+class GenerateAgentSkillRequest(BaseModel):
+    name: str
     description: str
 
 class MCPConfigRequest(BaseModel):
@@ -676,6 +686,7 @@ async def delete_memory(agent_id: str, memory_id: str):
 # ─── Skills ───────────────────────────────────────────────────────────────────
 
 @app.get("/api/skills")
+@app.get("/api/tools")
 async def list_skills(category: str = None):
     """List all available skills."""
     skills = SKILL_REGISTRY.list(category=category)
@@ -697,6 +708,7 @@ async def list_skills(category: str = None):
 
 
 @app.post("/api/skills/execute")
+@app.post("/api/tools/execute")
 async def execute_skill(req: SkillExecuteRequest):
     """Execute a skill directly."""
     result = SKILL_REGISTRY.execute(req.skill_name, **req.arguments)
@@ -709,6 +721,7 @@ async def execute_skill(req: SkillExecuteRequest):
 
 
 @app.post("/api/skills/register")
+@app.post("/api/tools/register")
 async def register_skill(req: RegisterSkillRequest):
     """Register a new custom skill from Python handler code."""
     if SKILL_REGISTRY.get(req.name) and not SKILL_REGISTRY.get(req.name).is_custom:
@@ -736,6 +749,7 @@ async def register_skill(req: RegisterSkillRequest):
 
 
 @app.delete("/api/skills/{skill_name}")
+@app.delete("/api/tools/{skill_name}")
 async def delete_skill(skill_name: str):
     """Delete a custom skill."""
     skill = SKILL_REGISTRY.get(skill_name)
@@ -748,6 +762,7 @@ async def delete_skill(skill_name: str):
 
 
 @app.post("/api/skills/generate")
+@app.post("/api/tools/generate")
 async def generate_skill(req: GenerateSkillRequest):
     """Generate a custom skill from natural language using the active LLM."""
     prompt = f"""
@@ -784,6 +799,71 @@ Task: {req.description}
         "code": code,
         "message": "Skill code generated. Please review and register."
     }
+
+
+@app.get("/api/agent-skills")
+async def list_agent_skills():
+    return {"skills": AGENT_SKILL_STORE.list()}
+
+
+@app.post("/api/agent-skills")
+async def create_agent_skill(req: AgentSkillRequest):
+    try:
+        skill = AGENT_SKILL_STORE.save(req.name, req.description, req.content)
+        return {"success": True, "skill": skill}
+    except FileExistsError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/agent-skills/{skill_name}")
+async def update_agent_skill(skill_name: str, req: AgentSkillRequest):
+    if skill_name != req.name:
+        raise HTTPException(400, "Skill name in URL must match request body")
+    try:
+        skill = AGENT_SKILL_STORE.save(req.name, req.description, req.content, overwrite=True)
+        return {"success": True, "skill": skill}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/agent-skills/{skill_name}")
+async def delete_agent_skill(skill_name: str):
+    try:
+        deleted = AGENT_SKILL_STORE.delete(skill_name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not deleted:
+        raise HTTPException(404, f"Agent skill '{skill_name}' not found")
+    return {"success": True}
+
+
+@app.post("/api/agent-skills/generate")
+async def generate_agent_skill(req: GenerateAgentSkillRequest):
+    prompt = f"""Write a practical Markdown workflow skill for an AI agent.
+Skill name: {req.name}
+Skill description: {req.description}
+
+Return only the Markdown instruction body, without YAML frontmatter or code fences.
+Include concise sections for when to use it, a numbered workflow, important constraints,
+and a final quality checklist. The workflow must be actionable with tools the agent may
+already have; do not claim unavailable tools or credentials exist."""
+    response = LLM_ROUTER.complete(
+        messages=[
+            {"role": "system", "content": "You write clear, reusable agent workflow instructions in Markdown."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    )
+    content = response.content.strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[-1]
+        if content.endswith("```"):
+            content = content[:-3].strip()
+    if not content:
+        raise HTTPException(502, "The model returned empty skill instructions")
+    return {"success": True, "content": content}
 
 
 # ─── Templates ────────────────────────────────────────────────────────────────

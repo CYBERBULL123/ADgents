@@ -8,10 +8,12 @@ let state = {
     selectedChatAgent: null,
     ws: null,
     skills: [],
+    agentSkills: [],
     templates: {},
     pendingTaskId: null,
     chatActivity: null,
     selectedBuilderSkills: new Set(),
+    selectedBuilderAgentSkills: new Set(),
     selectedTemplate: null
 };
 
@@ -36,7 +38,7 @@ function navigate(page) {
         // marketplace entry removed
         history: ['Task History', 'Browse all past autonomous task runs'],
         memory: ['Memory', "View and manage agents' memories"],
-        skills: ['Skills', 'Tools available to your agents'],
+        tools: ['Tools & Skills', 'Executable tools and Markdown workflows for agents'],
         files: ['Files', 'Browse and download agent-created files'],
         mcp: ['MCP Server', 'Model Context Protocol Integration'],
 
@@ -64,7 +66,10 @@ function navigate(page) {
     if (page === 'history') loadHistory();
     if (page === 'files') loadFiles();
     if (page === 'memory') populateMemorySelects();
-    if (page === 'skills') renderSkillsPage();
+    if (page === 'tools') {
+        renderSkillsPage();
+        loadAgentSkills();
+    }
     if (page === 'mcp') loadMCPPage();
     if (page === 'settings') {
         updateDBConnectionFields();
@@ -150,6 +155,7 @@ async function init() {
                 updateLoadingStatus('Loading skills...');
                 console.log('[ADgents] Loading skills...');
                 await loadSkills();
+                await loadAgentSkills();
                 
                 updateLoadingStatus('Loading templates...');
                 console.log('[ADgents] Loading templates...');
@@ -311,7 +317,7 @@ async function loadAgents() {
 
 async function loadSkills() {
     try {
-        const data = await api('/skills');
+        const data = await api('/tools');
         state.skills = data.skills || [];
         console.log(`[ADgents] Loaded ${state.skills.length} skills`);
     } catch (e) { 
@@ -493,6 +499,17 @@ function initBuilder() {
       </div>
     `).join('');
     }
+
+    const agentSkillGrid = document.getElementById('build-agent-skills-grid');
+    if (agentSkillGrid) {
+        agentSkillGrid.innerHTML = state.agentSkills.length
+            ? state.agentSkills.map(skill => `
+        <div class="skill-check-item ${state.selectedBuilderAgentSkills.has(skill.name) ? 'selected' : ''}"
+                    id="agent-skill-check-${skill.name}" onclick="toggleBuilderAgentSkill('${escapeHtml(skill.name)}')">
+          📝 ${escapeHtml(skill.name)}
+        </div>`).join('')
+            : '<div class="empty-state-small">No Markdown skills created yet. Use Manage skills to add one.</div>';
+    }
 }
 
 function loadTemplate(key) {
@@ -522,6 +539,11 @@ function loadTemplate(key) {
     document.querySelectorAll('.skill-check-item').forEach(el => el.classList.remove('selected'));
     state.selectedBuilderSkills.forEach(s => {
         document.getElementById(`skill-check-${s}`)?.classList.add('selected');
+    });
+    state.selectedBuilderAgentSkills = new Set(t.agent_skills || []);
+    document.querySelectorAll('#build-agent-skills-grid .skill-check-item').forEach(el => el.classList.remove('selected'));
+    state.selectedBuilderAgentSkills.forEach(s => {
+        document.getElementById(`agent-skill-check-${s}`)?.classList.add('selected');
     });
 
     updatePreview();
@@ -568,6 +590,11 @@ function editAgent(id) {
     state.selectedBuilderSkills.forEach(s => {
         document.getElementById(`skill-check-${s}`)?.classList.add('selected');
     });
+    state.selectedBuilderAgentSkills = new Set(a.persona.agent_skills || []);
+    document.querySelectorAll('#build-agent-skills-grid .skill-check-item').forEach(el => el.classList.remove('selected'));
+    state.selectedBuilderAgentSkills.forEach(s => {
+        document.getElementById(`agent-skill-check-${s}`)?.classList.add('selected');
+    });
 
     updatePreview();
     
@@ -585,6 +612,22 @@ function toggleSkill(name) {
         state.selectedBuilderSkills.add(name);
         el?.classList.add('selected');
     }
+}
+
+function toggleBuilderAgentSkill(name) {
+    const el = document.getElementById(`agent-skill-check-${name}`);
+    if (state.selectedBuilderAgentSkills.has(name)) {
+        state.selectedBuilderAgentSkills.delete(name);
+        el?.classList.remove('selected');
+    } else {
+        state.selectedBuilderAgentSkills.add(name);
+        el?.classList.add('selected');
+    }
+}
+
+function openAgentSkillManager() {
+    navigate('tools');
+    document.getElementById('agent-skill-tab')?.click();
 }
 
 function updatePreview() {
@@ -607,6 +650,7 @@ function resetBuilder() {
     document.getElementById('build-creativity').value = 70;
     document.getElementById('creativity-val').textContent = 70;
     state.selectedBuilderSkills = new Set();
+    state.selectedBuilderAgentSkills = new Set();
     document.querySelectorAll('.skill-check-item').forEach(el => el.classList.remove('selected'));
     updatePreview();
 }
@@ -629,6 +673,7 @@ async function createAgent() {
         autonomy_level: parseInt(document.getElementById('build-autonomy')?.value || 3),
         creativity: parseInt(document.getElementById('build-creativity')?.value || 70) / 100,
         skills: [...state.selectedBuilderSkills],
+        agent_skills: [...state.selectedBuilderAgentSkills],
         communication_style: `${document.getElementById('build-tone')?.value} and clear`
     };
 
@@ -1668,7 +1713,7 @@ function toggleSkillForm() {
     const btn = document.getElementById('skill-form-toggle-btn');
     const shown = form.style.display !== 'none';
     form.style.display = shown ? 'none' : 'block';
-    btn.textContent = shown ? '+ Add Skill' : '✕ Close';
+    btn.textContent = shown ? '+ Add Tool' : '✕ Close';
 }
 
 async function createCustomSkill() {
@@ -1693,8 +1738,8 @@ async function createCustomSkill() {
     if (btn) { btn.disabled = true; btn.textContent = 'Registering...'; }
 
     try {
-        await api('/skills/register', 'POST', { name, description, category, parameters, handler_code: handlerCode });
-        toast('🔧 Skill registered: ' + name, 'success');
+        await api('/tools/register', 'POST', { name, description, category, parameters, handler_code: handlerCode });
+        toast('🔧 Tool registered: ' + name, 'success');
         await loadSkills();
         renderSkillsPage();
         // Reset form fields
@@ -1712,7 +1757,7 @@ async function createCustomSkill() {
     } catch (e) {
         toast(e.message, 'error');
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '🔧 Register Skill'; }
+        if (btn) { btn.disabled = false; btn.textContent = '🔧 Register Tool'; }
     }
 }
 
@@ -1730,7 +1775,7 @@ async function generateSkillFromAI() {
     if (btn) btn.disabled = true;
 
     try {
-        const response = await api('/skills/generate', 'POST', { description: prompt });
+        const response = await api('/tools/generate', 'POST', { description: prompt });
         if (response.success && response.code) {
             // Fill the manual form with the generated data
             
@@ -1776,11 +1821,158 @@ async function generateSkillFromAI() {
 function deleteCustomSkill(name) {
     confirmAction('Delete custom skill "' + name + '"?', async () => {
         try {
-            await api('/skills/' + name, 'DELETE');
+                await api('/tools/' + name, 'DELETE');
             await loadSkills();
             renderSkillsPage();
-            toast('Skill "' + name + '" deleted', 'info');
+            toast('Tool "' + name + '" deleted', 'info');
         } catch (e) { toast(e.message, 'error'); }
+    });
+}
+
+let editingAgentSkillName = null;
+
+function switchCapabilityView(view, button) {
+    const showAgentSkills = view === 'agent-skills';
+    document.getElementById('tools-panel').style.display = showAgentSkills ? 'none' : 'block';
+    document.getElementById('agent-skills-panel').style.display = showAgentSkills ? 'block' : 'none';
+    document.querySelectorAll('.capability-tab').forEach(tab => {
+        const active = tab === button;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', String(active));
+    });
+}
+
+async function loadAgentSkills() {
+    const grid = document.getElementById('agent-skills-grid');
+    if (!grid) return;
+    try {
+        const data = await api('/agent-skills');
+        state.agentSkills = data.skills || [];
+        renderAgentSkills();
+    } catch (error) {
+        grid.innerHTML = `<div class="empty-state-small">Could not load Markdown skills: ${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function renderAgentSkills() {
+    const grid = document.getElementById('agent-skills-grid');
+    const count = document.getElementById('agent-skills-count');
+    if (!grid) return;
+    if (count) count.textContent = state.agentSkills.length;
+    if (!state.agentSkills.length) {
+        grid.innerHTML = '<div class="empty-state-small">No Markdown skills yet. Write one or draft it with AI.</div>';
+        return;
+    }
+    grid.innerHTML = state.agentSkills.map(skill => `
+      <article class="skill-card agent-skill-card">
+        <div class="skill-card-header">
+          <div class="skill-cat-icon">📝</div>
+          <div style="flex:1;min-width:0">
+            <div class="skill-name">${escapeHtml(skill.name)}</div>
+            <div class="skill-cat">Markdown workflow</div>
+          </div>
+        </div>
+        <div class="skill-desc">${escapeHtml(skill.description)}</div>
+        <div class="skill-card-footer">
+          <button class="btn btn-secondary btn-xs" onclick="editAgentSkill('${escapeHtml(skill.name)}')">Edit</button>
+          <button class="btn btn-danger btn-xs" onclick="deleteAgentSkill('${escapeHtml(skill.name)}')">Delete</button>
+        </div>
+      </article>`).join('');
+}
+
+function editAgentSkill(name) {
+    const skill = state.agentSkills.find(item => item.name === name);
+    if (!skill) return;
+    editingAgentSkillName = skill.name;
+    document.getElementById('agent-skill-name').value = skill.name;
+    document.getElementById('agent-skill-name').disabled = true;
+    document.getElementById('agent-skill-description').value = skill.description;
+    document.getElementById('agent-skill-content').value = skill.content;
+    document.getElementById('save-agent-skill-btn').textContent = 'Update Skill';
+    document.getElementById('agent-skill-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function saveAgentSkill() {
+    const name = document.getElementById('agent-skill-name').value.trim().toLowerCase();
+    const description = document.getElementById('agent-skill-description').value.trim();
+    const content = document.getElementById('agent-skill-content').value.trim();
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) {
+        toast('Use a lowercase skill name with letters, numbers, hyphens, or underscores.', 'error');
+        return;
+    }
+    if (!description || !content) {
+        toast('Add a description and Markdown instructions before saving.', 'error');
+        return;
+    }
+    const button = document.getElementById('save-agent-skill-btn');
+    button.disabled = true;
+    try {
+        const method = editingAgentSkillName ? 'PUT' : 'POST';
+        const path = editingAgentSkillName ? `/agent-skills/${encodeURIComponent(name)}` : '/agent-skills';
+        await api(path, method, { name, description, content });
+        setAgentSkillStatus(`Saved ${name}. It will be available to agents on their next task.`, 'success');
+        clearAgentSkillEditor();
+        await loadAgentSkills();
+    } catch (error) {
+        setAgentSkillStatus(error.message, 'error');
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function generateAgentSkillFromAI() {
+    const nameField = document.getElementById('agent-skill-name');
+    const descriptionField = document.getElementById('agent-skill-description');
+    const prompt = descriptionField.value.trim();
+    if (!prompt) {
+        toast('Describe the workflow first so the AI can draft a useful skill.', 'error');
+        return;
+    }
+    if (!nameField.value.trim()) {
+        nameField.value = prompt.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64) || 'agent-skill';
+    }
+    const button = document.getElementById('generate-agent-skill-btn');
+    button.disabled = true;
+    setAgentSkillStatus('Drafting Markdown instructions...', 'info');
+    try {
+        const result = await api('/agent-skills/generate', 'POST', {
+            name: nameField.value.trim().toLowerCase(),
+            description: prompt
+        });
+        document.getElementById('agent-skill-content').value = result.content || '';
+        setAgentSkillStatus('Draft ready. Review and edit it, then save when it looks right.', 'success');
+    } catch (error) {
+        setAgentSkillStatus(error.message, 'error');
+    } finally {
+        button.disabled = false;
+    }
+}
+
+function setAgentSkillStatus(message, type) {
+    const status = document.getElementById('agent-skill-status');
+    status.textContent = message;
+    status.dataset.type = type;
+}
+
+function clearAgentSkillEditor() {
+    editingAgentSkillName = null;
+    document.getElementById('agent-skill-name').value = '';
+    document.getElementById('agent-skill-name').disabled = false;
+    document.getElementById('agent-skill-description').value = '';
+    document.getElementById('agent-skill-content').value = '';
+    document.getElementById('save-agent-skill-btn').textContent = 'Save Skill';
+}
+
+function deleteAgentSkill(name) {
+    confirmAction(`Delete Markdown skill "${name}"?`, async () => {
+        try {
+            await api(`/agent-skills/${encodeURIComponent(name)}`, 'DELETE');
+            if (editingAgentSkillName === name) clearAgentSkillEditor();
+            await loadAgentSkills();
+            toast(`Deleted ${name}`, 'info');
+        } catch (error) {
+            toast(error.message, 'error');
+        }
     });
 }
 
