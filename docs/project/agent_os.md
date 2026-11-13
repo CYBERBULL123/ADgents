@@ -12,6 +12,13 @@ Agent OS is ADGents' lightweight runtime kernel that manages autonomous agent ex
 
 This page documents the architecture, data model, developer APIs, and extension points you will use when working on or extending the kernel.
 
+## Studio responsibilities
+
+- **Tasks** is the entry point for creating and running new agent work.
+- **Agent OS** is the operations console for existing pods: monitor status, filter the runtime inventory, suspend/resume/stop runs, inspect traces, and review SRE interventions.
+- The Agent OS inventory refreshes automatically while its page is open; it does not create runs itself.
+- Suspend and stop are cooperative controls: a running agent observes the status change at its next execution-loop checkpoint, so an active LLM or tool call is not interrupted mid-call.
+
 ## Quick file map
 
 - `core/agent.py` — ReAct engine, agent lifecycle, and `Agent.run()` orchestration

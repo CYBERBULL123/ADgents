@@ -92,6 +92,8 @@ class Agent:
         self.llm = llm_router or LLM_ROUTER
         self.memory = memory or AgentMemory(self.persona.id)
         self.max_iterations = max_iterations
+        self.pod_id: Optional[str] = None
+        self.trace_id: Optional[str] = None
         
         self.status = AgentStatus.IDLE
         self.current_task: Optional[AgentTask] = None

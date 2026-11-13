@@ -11,7 +11,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="/studio/style.css?v=2" />
+    <link rel="stylesheet" href="/studio/style.css?v=3" />
     <!-- Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
@@ -76,6 +76,10 @@
         <a class="nav-item" data-page="chat" onclick="navigate('chat');closeSidebar()">
             <span class="nav-icon">💬</span>
             <span>Chat</span>
+        </a>
+        <a class="nav-item" data-page="tasks" onclick="navigate('tasks');closeSidebar()">
+            <span class="nav-icon">⚡</span>
+            <span>Tasks</span>
         </a>
         <a class="nav-item" data-page="agentos" onclick="navigate('agentos');closeSidebar()">
             <span class="nav-icon">🪐</span>
@@ -435,7 +439,7 @@
                             </div>
                             <div class="chat-actions">
                                 <label class="btn btn-ghost btn-xs" style="display:inline-flex;align-items:center;gap:.4rem;cursor:pointer">
-                                    <input id="chat-autonomous" type="checkbox" checked /> Autonomous replies
+                                    <input id="chat-autonomous" type="checkbox" /> Autonomous task (creates a pod)
                                 </label>
                                 <button class="btn btn-ghost btn-xs" onclick="runAutonomousTask()">⚡ Run Task</button>
                                 <button class="btn btn-ghost btn-xs" onclick="resetChatSession()">🔄 New
@@ -446,6 +450,64 @@
                 </div>
             </section>
 
+            <!-- ── TASKS ── -->
+            <section class="page" id="page-tasks">
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Run an Autonomous Task</h3>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 1rem;">
+                            <label for="task-agent-select">Agent</label>
+                            <select id="task-agent-select" style="width: 100%;">
+                                <option value="">— Select Agent —</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 1rem;">
+                            <label for="task-description">Task description</label>
+                            <textarea id="task-description" rows="6" placeholder="Describe the work for the agent..." style="width: 100%; resize: vertical;"></textarea>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 1rem;">
+                            <label for="task-max-iter">Maximum iterations</label>
+                            <input id="task-max-iter" type="number" value="10" min="1" max="30" />
+                            <small style="font-size: 0.75rem; color: var(--text-muted);">Choose between 1 and 30 steps.</small>
+                        </div>
+                        <button class="btn btn-primary task-run-btn" onclick="startTask()">⚡ Run Task</button>
+                    </div>
+
+                    <div class="task-feed-card">
+                        <div class="task-feed-header">
+                            <div class="task-feed-title"><span>⚡</span><span id="task-feed-heading">Task Steps</span></div>
+                            <div class="task-feed-meta">
+                                <span class="badge badge-blue" id="task-status-badge" style="display: none;">⏳ Running</span>
+                            </div>
+                        </div>
+                        <div class="task-steps" id="task-steps">
+                            <div class="task-empty-state">
+                                <div class="task-empty-icon">⚡</div>
+                                <div class="task-empty-title">Ready for Tasks</div>
+                                <div class="task-empty-desc">Select an agent, describe the task, then hit Run.<br>Agent progress will appear here.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" id="task-result-panel" style="display: none; margin-top: 1.5rem;">
+                    <div class="task-result-header card-header">
+                        <div style="display: flex; align-items: center; gap: 0.6rem;">
+                            <span class="task-result-icon">✅</span>
+                            <h3 class="task-result-label">Task Complete</h3>
+                            <span id="task-result-agent-name" style="color: var(--text-secondary);"></span>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button class="btn btn-ghost btn-xs" onclick="copyTaskResult()" title="Copy task result">Copy</button>
+                            <button class="btn btn-ghost btn-xs" onclick="closeTaskResult()" title="Close task result">Close</button>
+                        </div>
+                    </div>
+                    <div class="task-result-body" id="task-result-body"></div>
+                </div>
+            </section>
+
             <!-- ── AGENT OS ── -->
             <section class="page" id="page-agentos">
                 <!-- Metrics Panel -->
@@ -453,7 +515,7 @@
                     <div class="stat-card">
                         <div class="stat-icon">🪐</div>
                         <div class="stat-value" id="stat-active-pods">0</div>
-                        <div class="stat-label">Agent Pods</div>
+                        <div class="stat-label">Active Pods</div>
                         <div class="stat-trend" id="stat-pods-trend">Active runtimes</div>
                     </div>
                     <div class="stat-card">
@@ -480,34 +542,25 @@
                     <!-- Pod Runtimes Controller -->
                     <div class="card">
                         <div class="card-header">
-                            <h3>🪐 Active Agent Pods</h3>
-                            <button class="btn btn-ghost btn-xs" onclick="refreshPods()">🔄 Refresh</button>
+                            <h3>🪐 Pod Runtime Inventory</h3>
+                            <div class="agent-os-toolbar">
+                                <select id="pod-status-filter" class="agent-os-filter" aria-label="Filter pods by status" onchange="refreshPods()">
+                                    <option value="">All statuses</option>
+                                    <option value="running">Running</option>
+                                    <option value="healing">Healing</option>
+                                    <option value="suspended">Suspended</option>
+                                    <option value="completed">Completed</option>
+                                    <option value="failed">Failed</option>
+                                    <option value="stopped">Stopped</option>
+                                </select>
+                                <button class="btn btn-ghost btn-xs" onclick="refreshPods()" title="Refresh runtime inventory">🔄</button>
+                                <button class="btn btn-primary btn-xs" onclick="navigate('tasks')" title="Start a new task">New task</button>
+                            </div>
                         </div>
                         <div class="pods-grid" id="pods-grid">
-                            <!-- Active Pods get injected here -->
-                            <div class="empty-state-small">No active agent pods. Create a run below.</div>
+                            <div class="empty-state-small">Loading runtime inventory...</div>
                         </div>
-
-                        <div class="card-header" style="margin-top: 2rem;">
-                            <h3>⚡ Create Agent Pod / Run Sandbox</h3>
-                        </div>
-                        <div class="form-grid" style="margin-top: 1rem;">
-                            <div class="form-group">
-                                <label>Agent Pod Runtime</label>
-                                <select id="os-agent-select" style="width: 100%; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); padding: 0.6rem; border-radius: 8px;">
-                                    <option value="">— Select Agent Pod —</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Max Iteration Limits</label>
-                                <input type="number" id="os-max-iter" value="10" min="1" max="30" style="width: 100%; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); padding: 0.6rem; border-radius: 8px;" />
-                            </div>
-                            <div class="form-group full-width">
-                                <label>Task Context / Sandbox Instruction</label>
-                                <textarea id="os-task-text" rows="3" placeholder="Define the task (e.g. Write Python code to read a non-existent file to test SRE self-healing)..." style="width: 100%; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); padding: 0.8rem; border-radius: 8px; font-family: var(--font); resize: vertical;"></textarea>
-                            </div>
-                        </div>
-                        <button class="btn btn-primary" onclick="launchPod()" style="margin-top: 1rem; width: 100%;">🚀 Launch Pod Runtime</button>
+                        <div class="agent-os-updated" id="agent-os-updated-at">Waiting for runtime data</div>
                     </div>
 
                     <!-- Live Trace & Interventions Panel -->

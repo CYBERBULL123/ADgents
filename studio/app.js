@@ -7,6 +7,10 @@ let state = {
     selectedAgent: null,
     selectedChatAgent: null,
     ws: null,
+    wsAgentId: null,
+    agentOsRefreshTimer: null,
+    agentOsRefreshing: false,
+    agentOsRefreshQueued: false,
     skills: [],
     agentSkills: [],
     templates: {},
@@ -19,11 +23,18 @@ let state = {
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 function navigate(page) {
+    const pageEl = document.getElementById(`page-${page}`);
+    if (!pageEl) {
+        console.warn(`[ADgents] Page not found: ${page}`);
+        return;
+    }
+
+    if (page !== 'agentos') stopAgentOsPolling();
+
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
 
-    const pageEl = document.getElementById(`page-${page}`);
-    if (pageEl) pageEl.classList.add('active');
+    pageEl.classList.add('active');
 
     const navEl = document.querySelector(`[data-page="${page}"]`);
     if (navEl) navEl.classList.add('active');
@@ -34,7 +45,7 @@ function navigate(page) {
         builder: ['Build Agent', 'Create a new AI persona'],
         chat: ['Chat', 'Converse with your agents'],
         tasks: ['Tasks', 'Run autonomous workflows'],
-        agentos: ['🪐 Agent OS Cluster', 'Containerized runtimes, observability traces, and self-healing logs'],
+        agentos: ['🪐 Agent OS', 'Pod health, lifecycle controls, traces, and SRE interventions'],
         // marketplace entry removed
         history: ['Task History', 'Browse all past autonomous task runs'],
         memory: ['Memory', "View and manage agents' memories"],
@@ -56,9 +67,9 @@ function navigate(page) {
     if (page === 'chat') renderChatPicker();
     if (page === 'tasks') populateTaskAgentSelect();
     if (page === 'agentos') {
-        populateOSAgentSelect();
         refreshPods();
         loadTracesList();
+        startAgentOsPolling();
     }
     // marketplace removed
 
@@ -766,15 +777,29 @@ function selectChatAgent(id) {
     connectWebSocket(id);
 }
 
-function connectWebSocket(agentId) {
-    if (state.ws) { state.ws.close(); state.ws = null; }
+function connectWebSocket(agentId, forTask = false) {
+    if (state.ws) { state.ws.close(); state.ws = null; state.wsAgentId = null; }
 
-    try {
-        const ws = new WebSocket(`ws://localhost:8000/ws/${agentId}`);
-        ws.onopen = () => {
-            if (state.selectedChatAgent === agentId) state.ws = ws;
-            else ws.close();
+    return new Promise(resolve => {
+        let settled = false;
+        const finish = socket => {
+            if (settled) return;
+            settled = true;
+            resolve(socket);
         };
+
+        try {
+            const ws = new WebSocket(`ws://localhost:8000/ws/${agentId}`);
+            ws.onopen = () => {
+                if (forTask || state.selectedChatAgent === agentId) {
+                    state.ws = ws;
+                    state.wsAgentId = agentId;
+                    finish(ws);
+                } else {
+                    ws.close();
+                    finish(null);
+                }
+            };
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
             if (data.type === 'chat_response') {
@@ -801,9 +826,19 @@ function connectWebSocket(agentId) {
                 toast('Task error: ' + (data.error || 'Unknown'), 'error');
             }
         };
-        ws.onerror = () => { state.ws = null; };
-        ws.onclose = () => { if (state.ws === ws) state.ws = null; };
-    } catch (e) { console.log('WS not available, using REST'); }
+            ws.onerror = () => {
+                if (state.ws === ws) { state.ws = null; state.wsAgentId = null; }
+                finish(null);
+            };
+            ws.onclose = () => {
+                if (state.ws === ws) { state.ws = null; state.wsAgentId = null; }
+                finish(null);
+            };
+        } catch (e) {
+            console.log('WS not available, using REST');
+            finish(null);
+        }
+    });
 }
 
 async function sendMessage() {
@@ -824,7 +859,7 @@ async function sendMessage() {
     // Show thinking indicator
     appendThinkingBubble(agent?.persona?.avatar || '🤖');
 
-    const autonomous = document.getElementById('chat-autonomous')?.checked ?? true;
+    const autonomous = document.getElementById('chat-autonomous')?.checked ?? false;
     if (autonomous) beginChatActivity();
 
     // Try WebSocket first, fallback to REST
@@ -983,18 +1018,21 @@ async function startTask() {
     const stepsEl = document.getElementById('task-steps');
     stepsEl.innerHTML = '<div class="task-step thought"><div class="step-header"><span class="step-type">🚀</span><span class="step-type thought">Starting task...</span></div><div class="step-content">' + escapeHtml(taskDesc) + '</div></div>';
 
-    // Connect WebSocket for real-time steps
-    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-        connectWebSocket(agentId);
-        await new Promise(r => setTimeout(r, 300)); // Let WS connect
-    }
-
     try {
+        // Subscribe before starting so no early task steps are missed.
+        if (!state.ws || state.ws.readyState !== WebSocket.OPEN || state.wsAgentId !== agentId) {
+            const taskSocket = await connectWebSocket(agentId, true);
+            if (!taskSocket) throw new Error('Could not connect to live task updates.');
+        }
+
         const res = await api('/tasks', 'POST', { agent_id: agentId, task: taskDesc, max_iterations: maxIter });
         state.pendingTaskId = res.task_id;
         toast(`⚡ Task started for ${state.agents[agentId]?.persona?.name}`, 'success');
         setTimeout(() => setTaskRunning(false, agentForTask?.persona?.name), 30000);
-    } catch (e) { toast(e.message, 'error'); }
+    } catch (e) {
+        setTaskRunning(false, agentForTask?.persona?.name);
+        toast(e.message, 'error');
+    }
 }
 
 // Helper function to convert file paths in text to download links
@@ -2706,18 +2744,30 @@ async function updateCrewAgentSelects() { toast('Crew features removed', 'info')
 async function sendCrewMessage() { toast('Sending messages between agents is disabled', 'error'); }
 async function broadcastCrewMessage() { toast('Broadcasting to crews is disabled', 'error'); }
 
-/* ─── Agent OS Page Logic ─────────────────────────────────────────────────── */
+/* ─── Agent OS Runtime Control Plane ──────────────────────────────────────── */
 
-function populateOSAgentSelect() {
-    const select = document.getElementById('os-agent-select');
-    if (!select) return;
-    
-    const agents = Object.values(state.agents);
-    select.innerHTML = '<option value="">— Select Agent Pod —</option>' + 
-        agents.map(a => `<option value="${a.persona.id}">${a.persona.name} (${a.persona.role})</option>`).join('');
+function startAgentOsPolling() {
+    if (state.agentOsRefreshTimer) return;
+    state.agentOsRefreshTimer = setInterval(() => {
+        if (!document.hidden && document.getElementById('page-agentos')?.classList.contains('active')) {
+            refreshPods();
+        }
+    }, 10000);
+}
+
+function stopAgentOsPolling() {
+    if (!state.agentOsRefreshTimer) return;
+    clearInterval(state.agentOsRefreshTimer);
+    state.agentOsRefreshTimer = null;
 }
 
 async function refreshPods() {
+    if (state.agentOsRefreshing) {
+        state.agentOsRefreshQueued = true;
+        return;
+    }
+    state.agentOsRefreshing = true;
+
     try {
         const res = await api('/pods');
         if (!res.success) throw new Error(res.error || 'Failed to fetch pods');
@@ -2725,14 +2775,16 @@ async function refreshPods() {
         const grid = document.getElementById('pods-grid');
         if (!grid) return;
         
-        const pods = res.pods || [];
+        const allPods = res.pods || [];
+        const statusFilter = document.getElementById('pod-status-filter')?.value || '';
+        const pods = statusFilter ? allPods.filter(p => p.status === statusFilter) : allPods;
         
         // Update Stats Summary
         let activeCount = 0;
         let totalCost = 0.0;
         let totalTokens = 0;
         
-        pods.forEach(p => {
+        allPods.forEach(p => {
             if (p.status === 'running' || p.status === 'healing') {
                 activeCount++;
             }
@@ -2743,6 +2795,16 @@ async function refreshPods() {
         document.getElementById('stat-active-pods').textContent = activeCount;
         document.getElementById('stat-cost').textContent = '$' + totalCost.toFixed(4);
         document.getElementById('stat-tokens').textContent = totalTokens.toLocaleString();
+
+        const interventionCounts = await Promise.all(allPods.map(async pod => {
+            try {
+                const detail = await api(`/pods/${pod.id}`);
+                return (detail.interventions || []).length;
+            } catch (e) {
+                return 0;
+            }
+        }));
+        document.getElementById('stat-heals').textContent = interventionCounts.reduce((sum, count) => sum + count, 0);
         
         // Set badging badge
         const badge = document.getElementById('pod-count-badge');
@@ -2752,20 +2814,15 @@ async function refreshPods() {
         }
         
         if (pods.length === 0) {
-            grid.innerHTML = '<div class="empty-state-small" style="grid-column: 1/-1;">No active agent pods. Launch one below!</div>';
+            grid.innerHTML = allPods.length
+                ? '<div class="empty-state-small" style="grid-column: 1/-1;">No pods match this status filter.</div>'
+                : '<div class="empty-state-small" style="grid-column: 1/-1;">No pods yet. Start a run from Tasks.</div>';
+            const updatedAt = document.getElementById('agent-os-updated-at');
+            if (updatedAt) updatedAt.textContent = `Updated ${new Date().toLocaleTimeString()}`;
             return;
         }
         
-        // Re-fetch SRE heals count by fetching all pod interventions
-        let healsCount = 0;
-        const renderPromises = pods.map(async (p) => {
-            let podDetail;
-            try {
-                const resDetail = await fetch(`http://localhost:8000/api/pods/${p.id}`);
-                podDetail = await resDetail.json();
-                healsCount += (podDetail.interventions || []).length;
-            } catch(err) {}
-            
+        const htmlParts = pods.map(p => {
             const avatar = state.agents[p.agent_id]?.persona?.avatar || '🤖';
             const costStr = p.cost ? p.cost.toFixed(4) : '0.0000';
             const tokensStr = p.tokens_used ? p.tokens_used.toLocaleString() : '0';
@@ -2796,13 +2853,17 @@ async function refreshPods() {
             `;
         });
         
-        const htmlParts = await Promise.all(renderPromises);
         grid.innerHTML = htmlParts.join('');
-        
-        document.getElementById('stat-heals').textContent = healsCount;
-        
+        const updatedAt = document.getElementById('agent-os-updated-at');
+        if (updatedAt) updatedAt.textContent = `Updated ${new Date().toLocaleTimeString()}`;
     } catch(e) {
         console.error('[AgentOS] Error refreshing pods:', e);
+    } finally {
+        state.agentOsRefreshing = false;
+        if (state.agentOsRefreshQueued) {
+            state.agentOsRefreshQueued = false;
+            refreshPods();
+        }
     }
 }
 
@@ -2857,41 +2918,6 @@ function confirmDeletePod(podId) {
             toast(e.message || 'Error deleting pod', 'error');
         }
     });
-}
-
-async function launchPod() {
-    const agentId = document.getElementById('os-agent-select').value;
-    const maxIter = parseInt(document.getElementById('os-max-iter').value) || 10;
-    const taskText = document.getElementById('os-task-text').value.trim();
-    
-    if (!agentId) {
-        toast('Please select an agent pod runtime.', 'error');
-        return;
-    }
-    if (!taskText) {
-        toast('Please enter a task description for the sandbox.', 'error');
-        return;
-    }
-    
-    try {
-        const res = await api('/tasks', 'POST', {
-            agent_id: agentId,
-            task: taskText,
-            max_iterations: maxIter
-        });
-        
-        toast('🚀 Agent Pod Container launched!', 'success');
-        document.getElementById('os-task-text').value = '';
-        
-        // Refresh grid
-        setTimeout(() => {
-            refreshPods();
-            loadTracesList();
-        }, 800);
-        
-    } catch(e) {
-        toast(e.message, 'error');
-    }
 }
 
 async function loadTracesList() {

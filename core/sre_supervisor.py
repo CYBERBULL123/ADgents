@@ -11,6 +11,7 @@ from typing import Dict, Any, Optional
 
 from .llm import LLM_ROUTER
 from .trace_db import (
+    create_span,
     create_healing_intervention,
     get_pod,
     get_span,
