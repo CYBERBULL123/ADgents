@@ -5,6 +5,7 @@ Validates the environment and starts the server.
 import sys
 import os
 from pathlib import Path
+from core.config import get_api_host, is_loopback_host
 
 def check_environment():
     """Pre-flight checks."""
@@ -69,14 +70,19 @@ def check_environment():
     print("\n🚀 Environment OK!\n")
 
 
-if __name__ == "__main__":
+def main():
     import uvicorn
     
     os.chdir(Path(__file__).parent)
     check_environment()
     
-    host = os.getenv("API_HOST", "0.0.0.0")
+    host = get_api_host()
     port = int(os.getenv("API_PORT", 8000))
+    if not is_loopback_host(host):
+        if os.getenv("ADGENTS_API_TOKEN"):
+            print(f"API is binding to {host}; protected API routes require Bearer authentication.")
+        else:
+            print(f"WARNING: API is binding to {host} without ADGENTS_API_TOKEN; protected requests will fail closed.")
     
     print("=" * 50)
     print("⚡ ADgents — Autonomous Agent Platform")
@@ -94,3 +100,7 @@ if __name__ == "__main__":
         reload=True,
         log_level="info"
     )
+
+
+if __name__ == "__main__":
+    main()

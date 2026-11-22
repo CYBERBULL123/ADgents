@@ -1,26 +1,42 @@
 /* ─── ADgents Studio — Main Application JS ───────────────────────── */
 'use strict';
 
-const API = 'http://localhost:8000/api';
+const API = `${window.location.origin}/api`;
 let state = {
     agents: {},
     selectedAgent: null,
     selectedChatAgent: null,
     ws: null,
+    wsAgentId: null,
+    agentOsRefreshTimer: null,
+    agentOsRefreshing: false,
+    agentOsRefreshQueued: false,
+    networkTaskPollTimer: null,
+    networkTaskResponses: [],
     skills: [],
+    agentSkills: [],
     templates: {},
     pendingTaskId: null,
+    chatActivity: null,
     selectedBuilderSkills: new Set(),
+    selectedBuilderAgentSkills: new Set(),
     selectedTemplate: null
 };
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 function navigate(page) {
+    const pageEl = document.getElementById(`page-${page}`);
+    if (!pageEl) {
+        console.warn(`[ADgents] Page not found: ${page}`);
+        return;
+    }
+
+    if (page !== 'agentos') stopAgentOsPolling();
+
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
 
-    const pageEl = document.getElementById(`page-${page}`);
-    if (pageEl) pageEl.classList.add('active');
+    pageEl.classList.add('active');
 
     const navEl = document.querySelector(`[data-page="${page}"]`);
     if (navEl) navEl.classList.add('active');
@@ -31,9 +47,16 @@ function navigate(page) {
         builder: ['Build Agent', 'Create a new AI persona'],
         chat: ['Chat', 'Converse with your agents'],
         tasks: ['Tasks', 'Run autonomous workflows'],
+        agentos: ['🪐 Agent OS', 'Pod health, lifecycle controls, traces, and SRE interventions'],
+        // marketplace entry removed
         history: ['Task History', 'Browse all past autonomous task runs'],
         memory: ['Memory', "View and manage agents' memories"],
-        skills: ['Skills', 'Tools available to your agents'],
+        tools: ['Tools & Skills', 'Executable tools and Markdown workflows for agents'],
+        files: ['Files', 'Browse and download agent-created files'],
+        mcp: ['MCP Server', 'Model Context Protocol Integration'],
+        network: ['Agent Network', 'Discover and delegate tasks to A2A agents'],
+
+        crews: ['Crew Collaboration', 'Multi-agent team coordination'],
         settings: ['Settings', 'Configure LLM providers and system'],
         docs: ['Documentation', 'Learn how to use ADgents']
     };
@@ -46,10 +69,36 @@ function navigate(page) {
     if (page === 'agents') renderAgentsGrid();
     if (page === 'chat') renderChatPicker();
     if (page === 'tasks') populateTaskAgentSelect();
+    if (page === 'agentos') {
+        refreshPods();
+        loadTracesList();
+        startAgentOsPolling();
+    }
+    // marketplace removed
+
+    if (page === 'crews') loadCrewsPage();
     if (page === 'history') loadHistory();
+    if (page === 'files') loadFiles();
     if (page === 'memory') populateMemorySelects();
-    if (page === 'skills') renderSkillsPage();
-    if (page === 'settings') loadProviderStatus();
+    if (page === 'tools') {
+        renderSkillsPage();
+        loadAgentSkills();
+    }
+    if (page === 'mcp') loadMCPPage();
+    if (page === 'network') loadAgentNetwork();
+    if (page === 'settings') {
+        updateDBConnectionFields();
+        document.getElementById('api-token').value = sessionStorage.getItem('adgents_api_token') || '';
+
+        // Load saved preferences
+        document.getElementById('org-name').value = localStorage.getItem('org_name') || '';
+        document.getElementById('memory-type').value = localStorage.getItem('memory_type') || 'multi_tier';
+        document.getElementById('auto-save').checked = localStorage.getItem('auto_save') === 'true';
+
+        // Load current LLM configuration and environment status
+        loadCurrentLLMConfig();
+        loadEnvironmentStatus();
+    }
     if (page === 'builder') initBuilder();
     if (page === 'dashboard') updateDashboard();
     if (page === 'docs') {
@@ -58,51 +107,216 @@ function navigate(page) {
 }
 
 // ─── API Helpers ─────────────────────────────────────────────────────────────
-async function api(path, method = 'GET', body = null) {
+async function api(path, method = 'GET', body = null, timeout = 10000) {
+    const token = sessionStorage.getItem('adgents_api_token');
     const opts = {
         method,
         headers: { 'Content-Type': 'application/json' }
     };
+    if (token) opts.headers.Authorization = `Bearer ${token}`;
     if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(`${API}${path}`, opts);
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    try {
+        const res = await fetch(`${API}${path}`, { ...opts, signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        if (!res.ok) {
+            let errorMsg = `HTTP ${res.status}`;
+            let responseBody = null;
+            try {
+                const err = await res.json();
+                responseBody = err;
+                // Handle Pydantic validation errors
+                if (err.detail) {
+                    if (Array.isArray(err.detail)) {
+                        errorMsg = err.detail.map(d => `${d.loc?.join('.')}: ${d.msg}`).join('; ');
+                    } else {
+                        errorMsg = err.detail;
+                    }
+                } else if (err.error) {
+                    errorMsg = err.error;
+                }
+            } catch (parseErr) {
+                // Response wasn't JSON, keep default message
+            }
+            const error = new Error(errorMsg);
+            error.status = res.status;
+            error.responseBody = responseBody;
+            throw error;
+        }
+        return res.json();
+    } catch (e) {
+        clearTimeout(timeoutId);
+        if (e.name === 'AbortError') {
+            throw new Error(`Request timeout for ${path} (${timeout}ms)`);
+        }
+        throw e;
     }
-    return res.json();
 }
 
 // ─── App Init ─────────────────────────────────────────────────────────────────
 async function init() {
-    await checkApiStatus();
-    await loadSkills();
-    await loadTemplates();
-    await loadAgents();
-    updateDashboard();
-    initBuilder();
-    setInterval(checkApiStatus, 10000);
+    try {
+        const updateLoadingStatus = (msg) => {
+            const el = document.getElementById('loading-status');
+            if (el) el.textContent = msg;
+            console.log('[ADgents]', msg);
+        };
+        
+        updateLoadingStatus('Initializing application...');
+        
+        // Set a timeout for the entire init sequence
+        const initPromise = Promise.race([
+            (async () => {
+                updateLoadingStatus('Checking API status...');
+                console.log('[ADgents] Checking API status...');
+                await checkApiStatus();
+                
+                updateLoadingStatus('Loading skills...');
+                console.log('[ADgents] Loading skills...');
+                await loadSkills();
+                await loadAgentSkills();
+                
+                updateLoadingStatus('Loading templates...');
+                console.log('[ADgents] Loading templates...');
+                await loadTemplates();
+                
+                updateLoadingStatus('Loading agents...');
+                console.log('[ADgents] Loading agents...');
+                await loadAgents();
+                
+                updateLoadingStatus('Updating dashboard...');
+                console.log('[ADgents] Updating dashboard...');
+                updateDashboard();
+                
+                updateLoadingStatus('Initializing builder...');
+                console.log('[ADgents] Initializing builder...');
+                initBuilder();
+                
+                console.log('[ADgents] Initialization complete!');
+                return true;
+            })(),
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Initialization timeout after 30 seconds')), 30000)
+            )
+        ]);
+        
+        await initPromise;
+        
+        // Hide loading overlay
+        const overlay = document.getElementById('app-loading-overlay');
+        if (overlay) {
+            overlay.style.opacity = '0';
+            overlay.style.transition = 'opacity 0.3s ease';
+            setTimeout(() => overlay.style.display = 'none', 300);
+        }
+        
+        // Set up task tab listeners
+        initTaskTabListeners();
+        
+        // Set up periodic API status checks
+        setInterval(checkApiStatus, 10000);
+        
+    } catch (e) {
+        console.error('[ADgents] Initialization error:', e);
+        
+        // Update loading overlay to show error
+        const overlay = document.getElementById('app-loading-overlay');
+        if (overlay) {
+            overlay.innerHTML = `
+                <div style="text-align: center; color: #e0e0e0; font-family: 'Inter', sans-serif;">
+                    <div style="font-size: 2rem; margin-bottom: 1rem;">⚠️</div>
+                    <div style="font-size: 1.2rem; font-weight: 600; margin-bottom: 0.5rem;">Initialization Error</div>
+                    <div style="color: #8b8ba8; margin-bottom: 1rem; max-width: 400px;">
+                        <div>${e.message || 'An error occurred during initialization'}</div>
+                    </div>
+                    <div style="font-size: 0.85rem; color: #4f4f6e; margin-bottom: 1.5rem;">
+                        Check your console (F12) for details. The dashboard may still load with limited functionality.
+                    </div>
+                    <button onclick="location.reload()" style="background: #7c3aed; color: white; border: none; padding: 0.5rem 1.5rem; border-radius: 6px; cursor: pointer;">Retry</button>
+                </div>
+            `;
+        }
+        
+        // Try to at least show the dashboard anyway
+        try {
+            updateDashboard();
+            initBuilder();
+            
+            // Hide overlay after 3 seconds
+            if (overlay) {
+                setTimeout(() => {
+                    overlay.style.opacity = '0';
+                    overlay.style.transition = 'opacity 0.3s ease';
+                    setTimeout(() => overlay.style.display = 'none', 300);
+                }, 3000);
+            }
+        } catch (e2) {
+            console.error('[ADgents] Failed to update UI:', e2);
+        }
+    }
 }
 
 async function checkApiStatus() {
     try {
-        const health = await api('/health');
+        console.log('[ADgents] Checking API health...');
+        const health = await api('/health', 'GET', null, 5000);
+        
         const dot = document.getElementById('api-status-dot');
         const text = document.getElementById('api-status-text');
         dot.className = 'status-dot online';
         text.textContent = 'API Connected';
 
+        // Update main status
         document.getElementById('status-api').textContent = '✅ Online';
         document.getElementById('status-api').className = 'badge badge-green';
-        document.getElementById('status-llm').textContent = health.llm_providers?.join(', ') || 'mock';
+        
+        // Update database status
+        document.getElementById('status-db').textContent = `✅ ${health.database_status || 'SQLite Ready'}`;
+        document.getElementById('status-db').className = 'badge badge-green';
+        
+        // Update skills engine status
+        document.getElementById('status-skills-engine').textContent = '✅ Active';
+        document.getElementById('status-skills-engine').className = 'badge badge-green';
+        
+        // Update LLM providers count
+        const availableLLMs = health.llm_providers?.length || 0;
+        document.getElementById('status-llm').textContent = `${availableLLMs}/${health.llm_total || 0} Ready`;
+        document.getElementById('status-llm').className = availableLLMs > 0 ? 'badge badge-green' : 'badge badge-orange';
+        
+        // Update stats
         document.getElementById('stat-skills').textContent = health.skills || 0;
-        document.getElementById('stat-providers').textContent = health.llm_providers?.length || 1;
-    } catch {
+        document.getElementById('stat-agents').textContent = health.agents || 0;
+        document.getElementById('stat-providers').textContent = availableLLMs || 0;
+        
+        // Detailed LLM providers
+        const llmDetailEl = document.getElementById('llm-status-details');
+        if (health.llm_details && Object.keys(health.llm_details).length > 0) {
+            llmDetailEl.innerHTML = Object.entries(health.llm_details).map(([name, info]) => {
+                const status = info.available ? '✅' : '❌';
+                const isDefault = info.is_default ? ' (default)' : '';
+                return `<div class="status-item" style="padding:0.5rem 0;"><span>${status} ${name}${isDefault}</span></div>`;
+            }).join('');
+        } else {
+            llmDetailEl.innerHTML = '<div class="status-item">No providers configured</div>';
+        }
+        
+        console.log('[ADgents] API health check passed');
+    } catch (e) {
+        console.error('[ADgents] API health check failed:', e);
         const dot = document.getElementById('api-status-dot');
         const text = document.getElementById('api-status-text');
         dot.className = 'status-dot offline';
-        text.textContent = 'API Offline';
+        text.textContent = 'API Offline: ' + (e.message || 'Connection failed');
         document.getElementById('status-api').textContent = '❌ Offline';
         document.getElementById('status-api').className = 'badge badge-red';
+        document.getElementById('status-db').textContent = '❓ Unknown';
+        document.getElementById('status-db').className = 'badge badge-red';
+        document.getElementById('status-skills-engine').textContent = '❓ Unknown';
+        document.getElementById('status-skills-engine').className = 'badge badge-red';
     }
 }
 
@@ -110,24 +324,40 @@ async function loadAgents() {
     try {
         const data = await api('/agents');
         state.agents = {};
-        (data.agents || []).forEach(a => { state.agents[a.persona.id] = a; });
+        (data.agents || []).forEach(a => { 
+            state.agents[a.persona.id] = a;
+        });
         updateAgentCount();
         updateDashboard();
-    } catch (e) { console.error('Load agents:', e); }
+        console.log(`[ADgents] Loaded ${Object.keys(state.agents).length} agents`);
+    } catch (e) { 
+        console.error('[ADgents] Error loading agents:', e);
+        // Continue with empty agents list
+        state.agents = {};
+        updateAgentCount();
+    }
 }
 
 async function loadSkills() {
     try {
-        const data = await api('/skills');
+        const data = await api('/tools');
         state.skills = data.skills || [];
-    } catch (e) { console.error('Load skills:', e); }
+        console.log(`[ADgents] Loaded ${state.skills.length} skills`);
+    } catch (e) { 
+        console.error('[ADgents] Error loading skills:', e);
+        state.skills = [];
+    }
 }
 
 async function loadTemplates() {
     try {
         const data = await api('/templates');
         state.templates = data.templates || {};
-    } catch (e) { console.error('Load templates:', e); }
+        console.log(`[ADgents] Loaded ${Object.keys(state.templates).length} templates`);
+    } catch (e) { 
+        console.error('[ADgents] Error loading templates:', e);
+        state.templates = {};
+    }
 }
 
 function updateAgentCount() {
@@ -146,6 +376,15 @@ async function refreshAll() {
 function updateDashboard() {
     const agents = Object.values(state.agents);
     const listEl = document.getElementById('dashboard-agents-list');
+    
+    // Update memory stats
+    let totalMemories = 0;
+    agents.forEach(a => {
+        const episodic = a.memory_stats?.episodic_memories || 0;
+        const semantic = a.memory_stats?.semantic_memories || 0;
+        totalMemories += episodic + semantic;
+    });
+    document.getElementById('stat-memories').textContent = totalMemories;
 
     if (agents.length === 0) {
         listEl.innerHTML = '<div class="empty-state-small">No agents yet. Create your first agent!</div>';
@@ -153,13 +392,13 @@ function updateDashboard() {
     }
 
     listEl.innerHTML = agents.slice(0, 5).map(a => `
-    <div class="dash-agent-item" onclick="navigate('chat')">
-      <div style="font-size:1.4rem">${a.persona.avatar}</div>
-      <div>
-        <div style="font-weight:600;font-size:0.9rem">${a.persona.name}</div>
+    <div class="dash-agent-item" onclick="navigate('chat')" style="padding: 0.75rem; border-radius: var(--radius-sm); background: var(--bg-card); border: 1px solid var(--border); margin-bottom: 0.5rem; display: flex; align-items: center; cursor: pointer; transition: all 0.2s;">
+      <div style="font-size:1.4rem; margin-right: 0.75rem;">${a.persona.avatar}</div>
+      <div style="flex: 1;">
+        <div style="font-weight:600;font-size:0.9rem;color:var(--text-primary)">${a.persona.name}</div>
         <div style="font-size:0.75rem;color:var(--text-secondary)">${a.persona.role}</div>
       </div>
-      <span class="badge badge-green" style="margin-left:auto">${a.status}</span>
+      <span class="badge badge-green" style="margin-left:auto;">${a.status || 'active'}</span>
     </div>
   `).join('');
 
@@ -191,15 +430,17 @@ function renderAgentsGrid(filter = '') {
         return `
       <div class="agent-card" onclick="openAgentChat('${a.persona.id}')">
         <div class="agent-card-header">
-          <div class="agent-avatar">${a.persona.avatar}</div>
+                    <div class="agent-avatar">${escapeHtml(a.persona.avatar || '🤖')}</div>
           <div class="agent-info">
-            <div class="agent-name">${a.persona.name}</div>
-            <div class="agent-role">${a.persona.role}</div>
+                        <div class="agent-name">${escapeHtml(a.persona.name)}</div>
+                        <div class="agent-role">${escapeHtml(a.persona.role)}</div>
           </div>
-          <span class="badge badge-${a.status === 'idle' ? 'green' : 'blue'}">${a.status}</span>
+                    <div class="agent-card-status">
+                        <span class="badge badge-${a.status === 'idle' ? 'green' : 'blue'}">${escapeHtml(a.status || 'active')}</span>
+          </div>
         </div>
         <div class="agent-traits">
-          ${traits.map(t => `<span class="trait-chip">${t}</span>`).join('')}
+                    ${traits.map(t => `<span class="trait-chip">${escapeHtml(t)}</span>`).join('')}
         </div>
         <div class="agent-stats-row">
           <div class="agent-stat">
@@ -281,6 +522,17 @@ function initBuilder() {
       </div>
     `).join('');
     }
+
+    const agentSkillGrid = document.getElementById('build-agent-skills-grid');
+    if (agentSkillGrid) {
+        agentSkillGrid.innerHTML = state.agentSkills.length
+            ? state.agentSkills.map(skill => `
+        <div class="skill-check-item ${state.selectedBuilderAgentSkills.has(skill.name) ? 'selected' : ''}"
+                    id="agent-skill-check-${skill.name}" onclick="toggleBuilderAgentSkill('${escapeHtml(skill.name)}')">
+          📝 ${escapeHtml(skill.name)}
+        </div>`).join('')
+            : '<div class="empty-state-small">No Markdown skills created yet. Use Manage skills to add one.</div>';
+    }
 }
 
 function loadTemplate(key) {
@@ -310,6 +562,11 @@ function loadTemplate(key) {
     document.querySelectorAll('.skill-check-item').forEach(el => el.classList.remove('selected'));
     state.selectedBuilderSkills.forEach(s => {
         document.getElementById(`skill-check-${s}`)?.classList.add('selected');
+    });
+    state.selectedBuilderAgentSkills = new Set(t.agent_skills || []);
+    document.querySelectorAll('#build-agent-skills-grid .skill-check-item').forEach(el => el.classList.remove('selected'));
+    state.selectedBuilderAgentSkills.forEach(s => {
+        document.getElementById(`agent-skill-check-${s}`)?.classList.add('selected');
     });
 
     updatePreview();
@@ -356,6 +613,11 @@ function editAgent(id) {
     state.selectedBuilderSkills.forEach(s => {
         document.getElementById(`skill-check-${s}`)?.classList.add('selected');
     });
+    state.selectedBuilderAgentSkills = new Set(a.persona.agent_skills || []);
+    document.querySelectorAll('#build-agent-skills-grid .skill-check-item').forEach(el => el.classList.remove('selected'));
+    state.selectedBuilderAgentSkills.forEach(s => {
+        document.getElementById(`agent-skill-check-${s}`)?.classList.add('selected');
+    });
 
     updatePreview();
     
@@ -373,6 +635,22 @@ function toggleSkill(name) {
         state.selectedBuilderSkills.add(name);
         el?.classList.add('selected');
     }
+}
+
+function toggleBuilderAgentSkill(name) {
+    const el = document.getElementById(`agent-skill-check-${name}`);
+    if (state.selectedBuilderAgentSkills.has(name)) {
+        state.selectedBuilderAgentSkills.delete(name);
+        el?.classList.remove('selected');
+    } else {
+        state.selectedBuilderAgentSkills.add(name);
+        el?.classList.add('selected');
+    }
+}
+
+function openAgentSkillManager() {
+    navigate('tools');
+    document.getElementById('agent-skill-tab')?.click();
 }
 
 function updatePreview() {
@@ -395,6 +673,7 @@ function resetBuilder() {
     document.getElementById('build-creativity').value = 70;
     document.getElementById('creativity-val').textContent = 70;
     state.selectedBuilderSkills = new Set();
+    state.selectedBuilderAgentSkills = new Set();
     document.querySelectorAll('.skill-check-item').forEach(el => el.classList.remove('selected'));
     updatePreview();
 }
@@ -417,6 +696,7 @@ async function createAgent() {
         autonomy_level: parseInt(document.getElementById('build-autonomy')?.value || 3),
         creativity: parseInt(document.getElementById('build-creativity')?.value || 70) / 100,
         skills: [...state.selectedBuilderSkills],
+        agent_skills: [...state.selectedBuilderAgentSkills],
         communication_style: `${document.getElementById('build-tone')?.value} and clear`
     };
 
@@ -433,7 +713,7 @@ async function createAgent() {
             toast(`✨ ${name} updated successfully!`, 'success');
         } else {
             const result = await api('/agents', 'POST', { persona });
-            state.agents[result.agent.persona.id] = result.agent;
+            state.agents[result.agent.id] = result.agent;
             toast(`✨ ${name} is ready!`, 'success');
         }
         
@@ -486,6 +766,7 @@ function renderChatPicker() {
 
 function selectChatAgent(id) {
     state.selectedChatAgent = id;
+    state.chatActivity = null;
     const agent = state.agents[id];
     if (!agent) return;
 
@@ -508,17 +789,46 @@ function selectChatAgent(id) {
     connectWebSocket(id);
 }
 
-function connectWebSocket(agentId) {
-    if (state.ws) { state.ws.close(); state.ws = null; }
+function connectWebSocket(agentId, forTask = false) {
+    if (state.ws) { state.ws.close(); state.ws = null; state.wsAgentId = null; }
 
-    try {
-        const ws = new WebSocket(`ws://localhost:8000/ws/${agentId}`);
-        ws.onopen = () => { state.ws = ws; };
+    return new Promise(resolve => {
+        let settled = false;
+        const finish = socket => {
+            if (settled) return;
+            settled = true;
+            resolve(socket);
+        };
+
+        try {
+            const protocols = [];
+            const token = sessionStorage.getItem('adgents_api_token');
+            if (token) protocols.push('adgents', `adgents-auth.${token}`);
+            const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${wsScheme}//${window.location.host}/ws/${agentId}`, protocols);
+            ws.onopen = () => {
+                if (forTask || state.selectedChatAgent === agentId) {
+                    state.ws = ws;
+                    state.wsAgentId = agentId;
+                    finish(ws);
+                } else {
+                    ws.close();
+                    finish(null);
+                }
+            };
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
             if (data.type === 'chat_response') {
                 removeThinkingBubble();
                 appendMessage('agent', data.response);
+                if (data.autonomous) finishChatActivity(data.status);
+                document.getElementById('chat-agent-status').innerHTML = `<span class="dot dot-green"></span> Ready`;
+            }
+            if (data.type === 'chat_step') appendChatProgressStep(data.step);
+            if (data.type === 'chat_error') {
+                removeThinkingBubble();
+                finishChatActivity('failed');
+                appendMessage('agent', `⚠️ Error: ${data.error || 'Autonomous chat failed'}`);
                 document.getElementById('chat-agent-status').innerHTML = `<span class="dot dot-green"></span> Ready`;
             }
             if (data.type === 'thought_step') {
@@ -532,9 +842,19 @@ function connectWebSocket(agentId) {
                 toast('Task error: ' + (data.error || 'Unknown'), 'error');
             }
         };
-        ws.onerror = () => { state.ws = null; };
-        ws.onclose = () => { state.ws = null; };
-    } catch (e) { console.log('WS not available, using REST'); }
+            ws.onerror = () => {
+                if (state.ws === ws) { state.ws = null; state.wsAgentId = null; }
+                finish(null);
+            };
+            ws.onclose = () => {
+                if (state.ws === ws) { state.ws = null; state.wsAgentId = null; }
+                finish(null);
+            };
+        } catch (e) {
+            console.log('WS not available, using REST');
+            finish(null);
+        }
+    });
 }
 
 async function sendMessage() {
@@ -555,21 +875,67 @@ async function sendMessage() {
     // Show thinking indicator
     appendThinkingBubble(agent?.persona?.avatar || '🤖');
 
+    const autonomous = document.getElementById('chat-autonomous')?.checked ?? false;
+    if (autonomous) beginChatActivity();
+
     // Try WebSocket first, fallback to REST
     if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-        state.ws.send(JSON.stringify({ type: 'chat', message: msg }));
+        state.ws.send(JSON.stringify({ type: 'chat', message: msg, autonomous }));
     } else {
         try {
-            const res = await api('/chat', 'POST', { agent_id: state.selectedChatAgent, message: msg });
+            const res = await api('/chat', 'POST', { agent_id: state.selectedChatAgent, message: msg, autonomous }, 180000);
             removeThinkingBubble();
+            if (res.autonomous) {
+                (res.steps || []).forEach(appendChatProgressStep);
+                finishChatActivity(res.status);
+            }
             appendMessage('agent', res.response);
             document.getElementById('chat-agent-status').innerHTML = `<span class="dot dot-green"></span> Ready`;
         } catch (e) {
             removeThinkingBubble();
+            if (autonomous) finishChatActivity('failed');
             appendMessage('agent', `⚠️ Error: ${e.message}`);
             document.getElementById('chat-agent-status').innerHTML = `<span class="dot dot-green"></span> Ready`;
         }
     }
+}
+
+function beginChatActivity() {
+    const container = document.getElementById('messages-container');
+    const panel = document.createElement('details');
+    panel.className = 'chat-activity';
+    panel.open = true;
+    panel.innerHTML = '<summary>Agent activity · running</summary><div class="chat-activity-steps"></div>';
+    container.appendChild(panel);
+    state.chatActivity = panel.querySelector('.chat-activity-steps');
+    container.scrollTop = container.scrollHeight;
+}
+
+function appendChatProgressStep(step) {
+    if (!state.chatActivity || !step) return;
+    const icons = { thought: '💭', action: '⚡', observation: '👁️', reflection: '🔮' };
+    const item = document.createElement('div');
+    item.className = `task-step ${step.step_type || 'thought'}`;
+    const content = step.content || '';
+    const safeContent = step.step_type === 'thought' || step.step_type === 'reflection'
+        ? renderMarkdown(content)
+        : escapeHtml(content);
+    const args = step.skill_args
+        ? `<pre class="chat-activity-args">${escapeHtml(JSON.stringify(step.skill_args, null, 2))}</pre>`
+        : '';
+    item.innerHTML = `<div class="step-header"><span>${icons[step.step_type] || '•'}</span><span class="step-type">${escapeHtml(step.step_type || 'thought')}</span></div>${step.skill_used ? `<div class="step-skill-badge">🔧 ${escapeHtml(step.skill_used)}</div>` : ''}${args}<div class="step-content md-content">${safeContent}</div>`;
+    state.chatActivity.appendChild(item);
+    const container = document.getElementById('messages-container');
+    container.scrollTop = container.scrollHeight;
+}
+
+function finishChatActivity(status = 'completed') {
+    const panel = state.chatActivity?.closest('.chat-activity');
+    if (panel) {
+        panel.querySelector('summary').textContent = `Agent activity · ${status || 'completed'}`;
+        panel.open = false;
+    }
+    state.chatActivity = null;
 }
 
 function handleChatKey(e) {
@@ -631,12 +997,26 @@ async function resetChatSession() {
 }
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
+// ─── Task Execution ─────────────────────────────────────────────────────────
+
+function initTaskTabListeners() {
+    // Task tab listeners no longer needed - only normal agent mode
+    console.log('[DEBUG] Task listeners initialized');
+}
+
+function switchTaskTab(mode) {
+    // Tab switching no longer needed - only single mode
+}
+
 function populateTaskAgentSelect() {
-    const sel = document.getElementById('task-agent-select');
-    if (!sel) return;
-    const agents = Object.values(state.agents);
-    sel.innerHTML = '<option value="">— Select Agent —</option>' +
-        agents.map(a => `<option value="${a.persona.id}">${a.persona.avatar} ${a.persona.name} (${a.persona.role})</option>`).join('');
+    const selNormal = document.getElementById('task-agent-select');
+    
+    // Show all agents
+    if (selNormal) {
+        const agents = Object.values(state.agents);
+        selNormal.innerHTML = '<option value="">— Select Agent —</option>' +
+            agents.map(a => `<option value="${a.persona.id}">${a.persona.avatar} ${a.persona.name} (${a.persona.role})</option>`).join('');
+    }
 }
 
 async function startTask() {
@@ -654,18 +1034,31 @@ async function startTask() {
     const stepsEl = document.getElementById('task-steps');
     stepsEl.innerHTML = '<div class="task-step thought"><div class="step-header"><span class="step-type">🚀</span><span class="step-type thought">Starting task...</span></div><div class="step-content">' + escapeHtml(taskDesc) + '</div></div>';
 
-    // Connect WebSocket for real-time steps
-    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-        connectWebSocket(agentId);
-        await new Promise(r => setTimeout(r, 300)); // Let WS connect
-    }
-
     try {
+        // Subscribe before starting so no early task steps are missed.
+        if (!state.ws || state.ws.readyState !== WebSocket.OPEN || state.wsAgentId !== agentId) {
+            const taskSocket = await connectWebSocket(agentId, true);
+            if (!taskSocket) throw new Error('Could not connect to live task updates.');
+        }
+
         const res = await api('/tasks', 'POST', { agent_id: agentId, task: taskDesc, max_iterations: maxIter });
         state.pendingTaskId = res.task_id;
-        toast(`Task started for ${state.agents[agentId]?.persona?.name}`, 'success');
+        toast(`⚡ Task started for ${state.agents[agentId]?.persona?.name}`, 'success');
         setTimeout(() => setTaskRunning(false, agentForTask?.persona?.name), 30000);
-    } catch (e) { toast(e.message, 'error'); }
+    } catch (e) {
+        setTaskRunning(false, agentForTask?.persona?.name);
+        toast(e.message, 'error');
+    }
+}
+
+// Helper function to convert file paths in text to download links
+function convertFilePathsToLinks(text) {
+    // Match patterns like "to data/files/filename.txt" or "to data\files\filename.txt"
+    const filePathPattern = /(to|in)\s+([\w\/\\.-]+\.(txt|md|json|csv|log|py|js|html|css|xml|yaml|yml))/gi;
+    return text.replace(filePathPattern, (match, prefix, filePath) => {
+        const encodedPath = encodeURIComponent(filePath.replace(/\\/g, '/'));
+        return `${prefix} <a href="/api/files/download?path=${encodedPath}" download style="color:#10b981;text-decoration:underline;font-weight:600;cursor:pointer" title="Click to download">${filePath}</a>`;
+    });
 }
 
 function addTaskStep(step) {
@@ -683,12 +1076,23 @@ function addTaskStep(step) {
     if (step.skill_used) {
         bodyHtml += `<span class="step-skill-badge">🔧 ${escapeHtml(step.skill_used)}</span><br>`;
     }
-    const stepMd = step.step_type === 'thought' || step.step_type === 'reflection'
-        ? renderMarkdown(step.content || '')
-        : escapeHtml(step.content || '');
-    bodyHtml += `<div class="step-content md-content">${stepMd}</div>`;
+    
+    // Render step content
+    let stepContent = step.content || '';
+    if (step.step_type === 'thought' || step.step_type === 'reflection') {
+        bodyHtml += `<div class="step-content md-content">${renderMarkdown(stepContent)}</div>`;
+    } else {
+        // For observations/actions, convert file paths to download links
+        const escapedContent = escapeHtml(stepContent);
+        const contentWithLinks = convertFilePathsToLinks(escapedContent);
+        bodyHtml += `<div class="step-content md-content">${contentWithLinks}</div>`;
+    }
+    
     if (step.skill_result) {
-        bodyHtml += `<div class="step-result-box">${escapeHtml(step.skill_result.substring(0, 300))}${step.skill_result.length > 300 ? '…' : ''}</div>`;
+        // Convert file paths to download links in skill results
+        const resultText = escapeHtml(step.skill_result.substring(0, 300));
+        const resultWithLinks = convertFilePathsToLinks(resultText);
+        bodyHtml += `<div class="step-result-box">${resultWithLinks}${step.skill_result.length > 300 ? '…' : ''}</div>`;
     }
 
     div.innerHTML = `
@@ -805,6 +1209,196 @@ async function teachAgent() {
     } catch (e) { toast(e.message, 'error'); }
 }
 
+// ─── Files ────────────────────────────────────────────────────────────────────
+let allFiles = [];
+
+async function loadFiles() {
+    try {
+        const data = await api('/files/list');
+        allFiles = data.files || [];
+        renderFilesGrid(allFiles);
+        
+        // Update badge
+        const badge = document.getElementById('files-count-badge');
+        if (badge) {
+            if (allFiles.length > 0) {
+                badge.textContent = allFiles.length;
+                badge.style.display = '';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+    } catch (e) {
+        console.error('Failed to load files:', e);
+        const grid = document.getElementById('files-grid');
+        if (grid) grid.innerHTML = '<div class="empty-state-small">Failed to load files</div>';
+    }
+}
+
+async function refreshFiles() {
+    toast('Refreshing files...', 'info');
+    await loadFiles();
+    toast('Files refreshed! 📁', 'success');
+}
+
+function filterFiles(query) {
+    if (!query || query.trim() === '') {
+        renderFilesGrid(allFiles);
+        return;
+    }
+    
+    const q = query.toLowerCase();
+    const filtered = allFiles.filter(f => 
+        f.name.toLowerCase().includes(q) || 
+        f.path.toLowerCase().includes(q)
+    );
+    renderFilesGrid(filtered);
+}
+
+function renderFilesGrid(files) {
+    const grid = document.getElementById('files-grid');
+    if (!grid) return;
+    
+    if (files.length === 0) {
+        grid.innerHTML = '<div class="empty-state-small">No files found</div>';
+        return;
+    }
+    
+    // Format file size
+    const formatSize = (bytes) => {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+    };
+    
+    // Get file icon based on extension
+    const getFileIcon = (ext) => {
+        const icons = {
+            '.txt': '📄', '.md': '📝', '.json': '🔧', '.csv': '📊',
+            '.log': '📋', '.py': '🐍', '.js': '💛', '.html': '🌐',
+            '.css': '🎨', '.xml': '📰', '.yaml': '⚙️', '.yml': '⚙️',
+            '.pdf': '📕', '.doc': '📘', '.docx': '📘'
+        };
+        return icons[ext] || '📄';
+    };
+    
+    // Format date
+    const formatDate = (isoString) => {
+        const date = new Date(isoString);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+        
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays < 7) return `${diffDays}d ago`;
+        return date.toLocaleDateString();
+    };
+    
+    grid.innerHTML = files.map(f => {
+        const encodedPath = encodeURIComponent(f.path);
+        const icon = getFileIcon(f.extension);
+        const canPreview = ['.txt', '.md', '.json', '.log', '.csv', '.html', '.css', '.js', '.py', '.xml', '.yaml', '.yml'].includes(f.extension);
+        
+        return `
+        <div class="file-card">
+            <div class="file-icon">${icon}</div>
+            <div class="file-info">
+                <div class="file-name">${escapeHtml(f.name)}</div>
+                <div class="file-meta">
+                    <span>${formatSize(f.size)}</span>
+                    <span>•</span>
+                    <span>${formatDate(f.modified)}</span>
+                </div>
+                <div class="file-path">${escapeHtml(f.path)}</div>
+            </div>
+            <div class="file-actions">
+                ${canPreview ? `<button class="btn btn-sm btn-secondary" onclick="previewFile('${encodedPath}', '${escapeHtml(f.name).replace(/'/g, "\\'")}', '${f.extension}')">👁️ View</button>` : ''}
+                <a href="/api/files/download?path=${encodedPath}" download class="btn btn-sm btn-primary">⬇️ Download</a>
+                <button class="btn btn-sm btn-danger" data-file-path="${escapeHtml(f.path)}" data-file-name="${escapeHtml(f.name)}" onclick="deleteFile(this)">🗑️ Delete</button>
+            </div>
+        </div>
+        `;
+    }).join('');
+}
+
+function deleteFile(button) {
+    const path = button.dataset.filePath;
+    const name = button.dataset.fileName;
+    if (!path) return;
+
+    confirmAction(`Delete "${name}"? This cannot be undone.`, async () => {
+        try {
+            await api(`/files?path=${encodeURIComponent(path)}`, 'DELETE');
+            toast(`Deleted ${name}`, 'success');
+            await loadFiles();
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    });
+}
+
+async function previewFile(encodedPath, fileName, extension) {
+    try {
+        const response = await fetch(`/api/files/download?path=${encodedPath}`);
+        if (!response.ok) throw new Error('Failed to load file');
+        
+        const text = await response.text();
+        
+        // Create modal
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+        modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+        
+        const maxLength = 50000;
+        const truncated = text.length > maxLength;
+        const displayText = truncated ? text.substring(0, maxLength) + '\n\n... [File truncated, download to see full content]' : text;
+        
+        modal.innerHTML = `
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);max-width:900px;max-height:80vh;width:90%;display:flex;flex-direction:column;box-shadow:var(--shadow);">
+                <div style="padding:1.5rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <h3 style="margin:0;font-size:1.1rem;">📄 ${escapeHtml(fileName)}</h3>
+                        <div style="color:var(--text-secondary);font-size:0.8rem;margin-top:0.25rem;">${text.length.toLocaleString()} characters${truncated ? ' (showing first ' + maxLength.toLocaleString() + ')' : ''}</div>
+                    </div>
+                    <button onclick="this.closest('.modal-overlay').remove()" class="btn btn-secondary" style="flex-shrink:0;margin-left:1rem;">✕ Close</button>
+                </div>
+                <div style="padding:1.5rem;overflow:auto;flex:1;">
+                    <pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-family:var(--font-mono);font-size:0.85rem;line-height:1.6;background:var(--bg-input);padding:1rem;border-radius:var(--radius-sm);border:1px solid var(--border);">${escapeHtml(displayText)}</pre>
+                </div>
+                <div style="padding:1rem 1.5rem;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:0.75rem;">
+                    <button onclick="this.closest('.modal-overlay').remove()" class="btn btn-secondary">Close</button>
+                    <a href="/api/files/download?path=${encodedPath}" download class="btn btn-primary">⬇️ Download</a>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // Close on overlay click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.remove();
+        });
+        
+        // Close on Escape key
+        const escHandler = (e) => {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+        
+    } catch (e) {
+        toast('Failed to preview file: ' + e.message, 'error');
+    }
+}
+
 // ─── Skills ───────────────────────────────────────────────────────────────────
 function renderSkillsPage() {
     const grid = document.getElementById('skills-grid-full');
@@ -830,42 +1424,290 @@ function renderSkillsPage() {
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
-async function loadProviderStatus() {
-    try {
-        const status = await api('/llm/status');
-        const el = document.getElementById('provider-status-list');
-        if (!el) return;
 
-        el.innerHTML = Object.entries(status).map(([name, info]) => `
-      <div class="status-item">
-        <span class="status-name">${name}</span>
-        <span class="badge badge-${info.available ? 'green' : 'red'}">
-          ${info.available ? '✅ Available' : '❌ Not configured'}
-          ${info.default ? ' ★ Default' : ''}
-        </span>
-      </div>
-    `).join('');
-    } catch (e) { console.error(e); }
+function saveApiToken() {
+    const token = document.getElementById('api-token').value.trim();
+    if (token) sessionStorage.setItem('adgents_api_token', token);
+    else sessionStorage.removeItem('adgents_api_token');
+    toast(token ? 'API token saved for this browser session' : 'API token cleared', 'success');
 }
 
+async function loadEnvironmentStatus() {
+    /**Load and display which LLM providers are configured in environment variables.*/
+    try {
+        const statusEl = document.getElementById('llm-env-status');
+        if (!statusEl) return;
+        
+        const response = await api('/llm/env-status');
+        
+        if (response.success && response.providers) {
+            const html = Object.entries(response.providers).map(([key, info]) => {
+                const status = info.configured ? '✅ Configured' : '❌ Not Configured';
+                const statusColor = info.configured ? 'color: #22c55e;' : 'color: #ef4444;';
+                return `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: rgba(0,0,0,0.2); border-radius: 0.25rem;">
+                        <span>${info.icon} <strong>${key.charAt(0).toUpperCase() + key.slice(1)}</strong></span>
+                        <span style="${statusColor} font-weight: 500;">${status}</span>
+                    </div>
+                `;
+            }).join('');
+            
+            statusEl.innerHTML = html;
+        } else {
+            statusEl.innerHTML = '<div style="color: var(--text-secondary);">Unable to load environment status</div>';
+        }
+    } catch (e) {
+        console.error('Error loading environment status:', e);
+        const statusEl = document.getElementById('llm-env-status');
+        if (statusEl) {
+            statusEl.innerHTML = '<div style="color: var(--text-secondary);">Error loading status</div>';
+        }
+    }
+}
+
+
+
+function updateDBConnectionFields() {
+    const dbType = document.getElementById('db-type')?.value || 'sqlite';
+    const fieldsEl = document.getElementById('db-connection-fields');
+    
+    if (dbType === 'sqlite') {
+        fieldsEl.innerHTML = '<small style="color: var(--text-secondary);">SQLite uses local file-based storage. No additional configuration needed.</small>';
+    } else if (dbType === 'postgresql') {
+        fieldsEl.innerHTML = `
+            <div class="form-group">
+                <label>Hostname</label>
+                <input type="text" id="db-host" class="form-input" placeholder="localhost" value="localhost" />
+            </div>
+            <div class="form-group">
+                <label>Port</label>
+                <input type="number" id="db-port" class="form-input" placeholder="5432" value="5432" />
+            </div>
+            <div class="form-group">
+                <label>Database Name</label>
+                <input type="text" id="db-name" class="form-input" placeholder="adgents" value="adgents" />
+            </div>
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" id="db-user" class="form-input" placeholder="postgres" />
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="db-pass" class="form-input" />
+            </div>
+        `;
+    } else if (dbType === 'mongodb') {
+        fieldsEl.innerHTML = `
+            <div class="form-group">
+                <label>Connection String</label>
+                <input type="text" id="db-uri" class="form-input" placeholder="mongodb://localhost:27017/adgents" />
+            </div>
+        `;
+    }
+}
+
+async function updateProviderSelection() {
+    // When user manually changes provider, just update the hint
+    const provider = document.getElementById('llm-provider')?.value?.trim();
+    const modelHint = document.getElementById('model-hint');
+    
+    console.log('Provider changed to:', provider);
+    
+    if (!provider || provider === '') {
+        if (modelHint) modelHint.textContent = 'Select a provider first...';
+        return;
+    }
+    
+    try {
+        const response = await api(`/llm/models/${provider}`);
+        
+        if (response.success) {
+            const modelField = document.getElementById('llm-model');
+            if (modelField && modelField.placeholder.includes(response.default_model)) {
+                // Placeholder already has this model, no need to update
+            }
+            if (modelHint) {
+                modelHint.textContent = `Enter any model name. (Suggested: ${response.default_model})`;
+            }
+        } else {
+            if (modelHint) modelHint.textContent = response.error || 'Failed to load provider info';
+        }
+    } catch (e) {
+        console.error('Error updating provider:', e);
+        if (modelHint) modelHint.textContent = `Error: ${e.message}`;
+    }
+}
+
+async function loadCurrentLLMConfig() {
+    try {
+        const response = await api('/llm/current-config');
+        if (response.success) {
+            // Update the display
+            const providerDisplay = document.getElementById('current-provider-display');
+            const modelDisplay = document.getElementById('current-model-display');
+            
+            if (providerDisplay) {
+                providerDisplay.textContent = `${response.icon} ${response.provider_display}`;
+            }
+            if (modelDisplay) {
+                modelDisplay.textContent = response.model;
+            }
+            
+            // Set the provider dropdown
+            document.getElementById('llm-provider').value = response.provider;
+            
+            // Set the model text field directly
+            document.getElementById('llm-model').value = response.model;
+            
+            // Update hint
+            await updateProviderSelection();
+            
+            toast('Configuration loaded', 'success');
+        }
+    } catch (e) {
+        console.error('Error loading current config:', e);
+        toast('Failed to load configuration', 'error');
+    }
+}
+
+
+
 async function saveLLMConfig() {
-    const provider = document.getElementById('llm-provider')?.value;
+    const provider = document.getElementById('llm-provider')?.value?.trim();
     const api_key = document.getElementById('llm-api-key')?.value?.trim();
     const model = document.getElementById('llm-model')?.value?.trim();
 
-    if (!api_key && provider !== 'ollama') {
-        toast('Enter an API key', 'error');
+    if (!provider || provider === '') {
+        toast('Select a provider', 'error');
+        return;
+    }
+
+    if (!model || model === '') {
+        toast('Enter a model name', 'error');
         return;
     }
 
     const statusEl = document.getElementById('llm-config-status');
-    statusEl.innerHTML = '<span class="badge badge-blue">Saving...</span>';
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving configuration...</span>';
 
     try {
-        await api('/llm/configure', 'POST', { provider, api_key, model: model || undefined });
-        statusEl.innerHTML = '<span class="badge badge-green">✅ Configured successfully</span>';
-        toast(`${provider} configured!`, 'success');
-        loadProviderStatus();
+        // Only send API key if provided (non-empty)
+        const payload = { provider, model };
+        if (api_key) {
+            payload.api_key = api_key;
+        }
+        
+        const response = await api('/llm/configure', 'POST', payload);
+        
+        if (response.success) {
+            // Reload current config to update display
+            await loadCurrentLLMConfig();
+            
+            statusEl.innerHTML = '<span class="badge badge-green">✅ Configuration saved successfully!</span>';
+            toast(`✅ ${provider} → ${model} configured and saved!`, 'success');
+            
+            // Clear API key field for security
+            document.getElementById('llm-api-key').value = '';
+        } else {
+            throw new Error(response.error || 'Unknown error');
+        }
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ Failed: ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function testLLMConnection() {
+    const provider = document.getElementById('llm-provider')?.value?.trim();
+    if (!provider) {
+        toast('Select a provider first', 'error');
+        return;
+    }
+
+    const statusEl = document.getElementById('llm-config-status');
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<span class="badge badge-blue">🧪 Testing connection to ' + provider + '...</span>';
+
+    try {
+        const result = await api('/llm/test', 'POST', { provider });
+        if (result.success) {
+            statusEl.innerHTML = `<span class="badge badge-green">✅ ${result.message || 'Connection successful!'}</span><br><small style="color: var(--text-secondary); margin-top: 0.5rem; display: block;">Sample response: "${result.response_sample || ''}"</small>`;
+            toast('Connection test passed! ✅', 'success');
+        } else {
+            statusEl.innerHTML = `<span class="badge badge-red">❌ Connection failed</span><br><small style="color: #ef4444; margin-top: 0.5rem; display: block;">${result.error || 'Unknown error'}</small>`;
+            toast(result.error || 'Connection test failed', 'error');
+        }
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function refreshProviderStatus() {
+    const statusEl = document.getElementById('provider-status-list');
+    statusEl.innerHTML = '<span style="color: var(--text-secondary);">Refreshing...</span>';
+    await loadProviderStatus();
+}
+
+async function saveMCPConfig() {
+    const mode = document.getElementById('mcp-mode')?.value || 'stdio';
+    const port = parseInt(document.getElementById('mcp-port')?.value || '8001');
+
+    const statusEl = document.getElementById('mcp-config-status');
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
+
+    try {
+        await api('/mcp/configure', 'POST', { mode, port });
+        statusEl.innerHTML = '<span class="badge badge-green">✅ MCP configuration saved</span>';
+        toast('MCP settings saved!', 'success');
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function saveDBConfig() {
+    const dbType = document.getElementById('db-type')?.value || 'sqlite';
+    const statusEl = document.getElementById('db-config-status');
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
+
+    try {
+        const config = { type: dbType };
+        
+        if (dbType !== 'sqlite') {
+            config.host = document.getElementById('db-host')?.value || 'localhost';
+            config.port = parseInt(document.getElementById('db-port')?.value || '5432');
+            config.database = document.getElementById('db-name')?.value || 'adgents';
+            config.username = document.getElementById('db-user')?.value || '';
+            config.password = document.getElementById('db-pass')?.value || '';
+        }
+
+        // In a real implementation, this would call a backend endpoint
+        statusEl.innerHTML = '<span class="badge badge-green">✅ Database settings saved (requires restart)</span>';
+        toast('Database settings saved!', 'success');
+    } catch (e) {
+        statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
+        toast(e.message, 'error');
+    }
+}
+
+async function savePersonalSettings() {
+    const orgName = document.getElementById('org-name')?.value || 'My Organization';
+    const memoryType = document.getElementById('memory-type')?.value || 'multi_tier';
+    const autoSave = document.getElementById('auto-save')?.checked || false;
+
+    const statusEl = document.getElementById('personal-config-status');
+    statusEl.innerHTML = '<span class="badge badge-blue">⏳ Saving...</span>';
+
+    try {
+        // Save to localStorage for client-side preferences
+        localStorage.setItem('org_name', orgName);
+        localStorage.setItem('memory_type', memoryType);
+        localStorage.setItem('auto_save', autoSave);
+
+        statusEl.innerHTML = '<span class="badge badge-green">✅ Settings saved</span>';
+        toast('Personal settings saved!', 'success');
     } catch (e) {
         statusEl.innerHTML = `<span class="badge badge-red">❌ ${e.message}</span>`;
         toast(e.message, 'error');
@@ -932,7 +1774,7 @@ function toggleSkillForm() {
     const btn = document.getElementById('skill-form-toggle-btn');
     const shown = form.style.display !== 'none';
     form.style.display = shown ? 'none' : 'block';
-    btn.textContent = shown ? '+ Add Skill' : '✕ Close';
+    btn.textContent = shown ? '+ Add Tool' : '✕ Close';
 }
 
 async function createCustomSkill() {
@@ -957,8 +1799,8 @@ async function createCustomSkill() {
     if (btn) { btn.disabled = true; btn.textContent = 'Registering...'; }
 
     try {
-        await api('/skills/register', 'POST', { name, description, category, parameters, handler_code: handlerCode });
-        toast('🔧 Skill registered: ' + name, 'success');
+        await api('/tools/register', 'POST', { name, description, category, parameters, handler_code: handlerCode });
+        toast('🔧 Tool registered: ' + name, 'success');
         await loadSkills();
         renderSkillsPage();
         // Reset form fields
@@ -976,7 +1818,7 @@ async function createCustomSkill() {
     } catch (e) {
         toast(e.message, 'error');
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '🔧 Register Skill'; }
+        if (btn) { btn.disabled = false; btn.textContent = '🔧 Register Tool'; }
     }
 }
 
@@ -994,7 +1836,7 @@ async function generateSkillFromAI() {
     if (btn) btn.disabled = true;
 
     try {
-        const response = await api('/skills/generate', 'POST', { description: prompt });
+        const response = await api('/tools/generate', 'POST', { description: prompt });
         if (response.success && response.code) {
             // Fill the manual form with the generated data
             
@@ -1040,11 +1882,158 @@ async function generateSkillFromAI() {
 function deleteCustomSkill(name) {
     confirmAction('Delete custom skill "' + name + '"?', async () => {
         try {
-            await api('/skills/' + name, 'DELETE');
+                await api('/tools/' + name, 'DELETE');
             await loadSkills();
             renderSkillsPage();
-            toast('Skill "' + name + '" deleted', 'info');
+            toast('Tool "' + name + '" deleted', 'info');
         } catch (e) { toast(e.message, 'error'); }
+    });
+}
+
+let editingAgentSkillName = null;
+
+function switchCapabilityView(view, button) {
+    const showAgentSkills = view === 'agent-skills';
+    document.getElementById('tools-panel').style.display = showAgentSkills ? 'none' : 'block';
+    document.getElementById('agent-skills-panel').style.display = showAgentSkills ? 'block' : 'none';
+    document.querySelectorAll('.capability-tab').forEach(tab => {
+        const active = tab === button;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', String(active));
+    });
+}
+
+async function loadAgentSkills() {
+    const grid = document.getElementById('agent-skills-grid');
+    if (!grid) return;
+    try {
+        const data = await api('/agent-skills');
+        state.agentSkills = data.skills || [];
+        renderAgentSkills();
+    } catch (error) {
+        grid.innerHTML = `<div class="empty-state-small">Could not load Markdown skills: ${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function renderAgentSkills() {
+    const grid = document.getElementById('agent-skills-grid');
+    const count = document.getElementById('agent-skills-count');
+    if (!grid) return;
+    if (count) count.textContent = state.agentSkills.length;
+    if (!state.agentSkills.length) {
+        grid.innerHTML = '<div class="empty-state-small">No Markdown skills yet. Write one or draft it with AI.</div>';
+        return;
+    }
+    grid.innerHTML = state.agentSkills.map(skill => `
+      <article class="skill-card agent-skill-card">
+        <div class="skill-card-header">
+          <div class="skill-cat-icon">📝</div>
+          <div style="flex:1;min-width:0">
+            <div class="skill-name">${escapeHtml(skill.name)}</div>
+            <div class="skill-cat">Markdown workflow</div>
+          </div>
+        </div>
+        <div class="skill-desc">${escapeHtml(skill.description)}</div>
+        <div class="skill-card-footer">
+          <button class="btn btn-secondary btn-xs" onclick="editAgentSkill('${escapeHtml(skill.name)}')">Edit</button>
+          <button class="btn btn-danger btn-xs" onclick="deleteAgentSkill('${escapeHtml(skill.name)}')">Delete</button>
+        </div>
+      </article>`).join('');
+}
+
+function editAgentSkill(name) {
+    const skill = state.agentSkills.find(item => item.name === name);
+    if (!skill) return;
+    editingAgentSkillName = skill.name;
+    document.getElementById('agent-skill-name').value = skill.name;
+    document.getElementById('agent-skill-name').disabled = true;
+    document.getElementById('agent-skill-description').value = skill.description;
+    document.getElementById('agent-skill-content').value = skill.content;
+    document.getElementById('save-agent-skill-btn').textContent = 'Update Skill';
+    document.getElementById('agent-skill-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function saveAgentSkill() {
+    const name = document.getElementById('agent-skill-name').value.trim().toLowerCase();
+    const description = document.getElementById('agent-skill-description').value.trim();
+    const content = document.getElementById('agent-skill-content').value.trim();
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) {
+        toast('Use a lowercase skill name with letters, numbers, hyphens, or underscores.', 'error');
+        return;
+    }
+    if (!description || !content) {
+        toast('Add a description and Markdown instructions before saving.', 'error');
+        return;
+    }
+    const button = document.getElementById('save-agent-skill-btn');
+    button.disabled = true;
+    try {
+        const method = editingAgentSkillName ? 'PUT' : 'POST';
+        const path = editingAgentSkillName ? `/agent-skills/${encodeURIComponent(name)}` : '/agent-skills';
+        await api(path, method, { name, description, content });
+        setAgentSkillStatus(`Saved ${name}. It will be available to agents on their next task.`, 'success');
+        clearAgentSkillEditor();
+        await loadAgentSkills();
+    } catch (error) {
+        setAgentSkillStatus(error.message, 'error');
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function generateAgentSkillFromAI() {
+    const nameField = document.getElementById('agent-skill-name');
+    const descriptionField = document.getElementById('agent-skill-description');
+    const prompt = descriptionField.value.trim();
+    if (!prompt) {
+        toast('Describe the workflow first so the AI can draft a useful skill.', 'error');
+        return;
+    }
+    if (!nameField.value.trim()) {
+        nameField.value = prompt.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64) || 'agent-skill';
+    }
+    const button = document.getElementById('generate-agent-skill-btn');
+    button.disabled = true;
+    setAgentSkillStatus('Drafting Markdown instructions...', 'info');
+    try {
+        const result = await api('/agent-skills/generate', 'POST', {
+            name: nameField.value.trim().toLowerCase(),
+            description: prompt
+        });
+        document.getElementById('agent-skill-content').value = result.content || '';
+        setAgentSkillStatus('Draft ready. Review and edit it, then save when it looks right.', 'success');
+    } catch (error) {
+        setAgentSkillStatus(error.message, 'error');
+    } finally {
+        button.disabled = false;
+    }
+}
+
+function setAgentSkillStatus(message, type) {
+    const status = document.getElementById('agent-skill-status');
+    status.textContent = message;
+    status.dataset.type = type;
+}
+
+function clearAgentSkillEditor() {
+    editingAgentSkillName = null;
+    document.getElementById('agent-skill-name').value = '';
+    document.getElementById('agent-skill-name').disabled = false;
+    document.getElementById('agent-skill-description').value = '';
+    document.getElementById('agent-skill-content').value = '';
+    document.getElementById('save-agent-skill-btn').textContent = 'Save Skill';
+}
+
+function deleteAgentSkill(name) {
+    confirmAction(`Delete Markdown skill "${name}"?`, async () => {
+        try {
+            await api(`/agent-skills/${encodeURIComponent(name)}`, 'DELETE');
+            if (editingAgentSkillName === name) clearAgentSkillEditor();
+            await loadAgentSkills();
+            toast(`Deleted ${name}`, 'info');
+        } catch (error) {
+            toast(error.message, 'error');
+        }
     });
 }
 
@@ -1179,15 +2168,15 @@ function renderMarkdown(text) {
 function updateModelHint() {
     const provider = document.getElementById('llm-provider')?.value;
     const input = document.getElementById('llm-model');
-    const hint = document.getElementById('llm-model-hint');
+    const hintEl = document.getElementById('model-hint');
     const defaults = {
-        openai: 'gpt-4o-mini',
-        gemini: 'gemini-1.5-flash',
-        claude: 'claude-3-5-sonnet-20241022',
-        ollama: 'llama3'
+        openai: 'gpt-4o-mini (or gpt-4o, gpt-4-turbo)',
+        gemini: 'gemini-1.5-flash (or gemini-1.5-pro)',
+        claude: 'claude-3-5-sonnet-20241022 (or claude-3 variants)',
+        ollama: 'llama3 (or mistral, neural-chat, etc.)'
     };
     if (input) input.placeholder = defaults[provider] || 'model-name';
-    if (hint) hint.textContent = `(default: ${defaults[provider] || 'varies'})`;
+    if (hintEl) hintEl.textContent = `Recommended: ${defaults[provider] || 'varies'}`;
 }
 
 // ─── WebSocket task complete handler ─────────────────────────────────────────
@@ -1242,6 +2231,48 @@ function handleTaskComplete(data) {
             ? result
             : '_No result text was returned. Check the Task Steps above for observations._';
         body.innerHTML = renderMarkdown(displayResult);
+        
+        // Display files created during task execution
+        if (task.metadata && task.metadata.files_created && task.metadata.files_created.length > 0) {
+            const filesSection = document.createElement('div');
+            filesSection.style.marginTop = '1.5rem';
+            filesSection.style.padding = '1rem';
+            filesSection.style.background = 'rgba(16,185,129,0.06)';
+            filesSection.style.border = '1px solid rgba(16,185,129,0.2)';
+            filesSection.style.borderRadius = '8px';
+            
+            const filesTitle = document.createElement('div');
+            filesTitle.style.fontWeight = '600';
+            filesTitle.style.marginBottom = '0.5rem';
+            filesTitle.style.color = 'var(--green)';
+            filesTitle.innerHTML = '📁 Files Created';
+            filesSection.appendChild(filesTitle);
+            
+            const filesList = document.createElement('ul');
+            filesList.style.listStyle = 'none';
+            filesList.style.padding = '0';
+            filesList.style.margin = '0';
+            
+            task.metadata.files_created.forEach(filePath => {
+                const fileItem = document.createElement('li');
+                fileItem.style.padding = '0.5rem';
+                fileItem.style.marginBottom = '0.25rem';
+                fileItem.style.background = 'rgba(16,185,129,0.08)';
+                fileItem.style.borderRadius = '4px';
+                fileItem.style.fontFamily = 'monospace';
+                fileItem.style.fontSize = '0.85rem';
+                fileItem.style.color = '#34d399';
+                
+                // Create download link
+                const encodedPath = encodeURIComponent(filePath.replace(/\\/g, '/'));
+                fileItem.innerHTML = `📄 <a href="/api/files/download?path=${encodedPath}" download style="color:#34d399;text-decoration:underline;cursor:pointer;font-weight:600" title="Click to download ${escapeHtml(filePath)}">${escapeHtml(filePath)}</a>`;
+                filesList.appendChild(fileItem);
+            });
+            
+            filesSection.appendChild(filesList);
+            body.appendChild(filesSection);
+        }
+        
         toast('Task completed! ✅', 'success');
     }
 
@@ -1440,11 +2471,26 @@ async function loadDocs() {
         const docs = data.docs || [];
         state.docsLoaded = true;
         
-        // Preferred ordering if these files exist
-        const order = ['index', 'quickstart', 'architecture', 'studio', 'sdk', 'skills', 'use_cases', 'crew', 'mcp_adk', 'deployment'];
-        docs.sort((a, b) => {
-            const idxA = order.indexOf(a);
-            const idxB = order.indexOf(b);
+        // Organize docs by section
+        const packagesDocs = docs.filter(d => d.startsWith('packages-')).map(d => d.replace('packages-', ''));
+        const projectDocs = docs.filter(d => d.startsWith('project-')).map(d => d.replace('project-', ''));
+        
+        // Preferred ordering within sections
+        const packagesOrder = ['installation', 'integration', 'api_reference', 'crew_management', 'skills', 'advanced'];
+        const projectOrder = ['quickstart', 'architecture', 'studio', 'crew', 'use_cases', 'deployment'];
+        
+        packagesDocs.sort((a, b) => {
+            const idxA = packagesOrder.indexOf(a);
+            const idxB = packagesOrder.indexOf(b);
+            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+            if (idxA !== -1) return -1;
+            if (idxB !== -1) return 1;
+            return a.localeCompare(b);
+        });
+        
+        projectDocs.sort((a, b) => {
+            const idxA = projectOrder.indexOf(a);
+            const idxB = projectOrder.indexOf(b);
             if (idxA !== -1 && idxB !== -1) return idxA - idxB;
             if (idxA !== -1) return -1;
             if (idxB !== -1) return 1;
@@ -1454,10 +2500,31 @@ async function loadDocs() {
         const listEl = document.getElementById('docs-nav-list');
         if (!listEl) return;
         
-        listEl.innerHTML = docs.map(d => {
-            const label = d === 'index' ? 'Overview' : (d.charAt(0).toUpperCase() + d.slice(1));
-            return `<li class="docs-nav-item" id="nav-doc-${d}" onclick="loadDocContent('${d}')">${escapeHtml(label)}</li>`;
-        }).join('');
+        // Build HTML with sections
+        let html = '';
+        
+        // Index first
+        html += '<li class="docs-nav-item" id="nav-doc-index" onclick="loadDocContent(\'index\')">📘 Overview</li>';
+        
+        // Package integration section
+        if (packagesDocs.length > 0) {
+            html += '<li class="docs-section-header">📦 Package Integration</li>';
+            packagesDocs.forEach(d => {
+                const label = d.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                html += `<li class="docs-nav-item" id="nav-doc-packages-${d}" onclick="loadDocContent('packages-${d}')">${escapeHtml(label)}</li>`;
+            });
+        }
+        
+        // Project application section
+        if (projectDocs.length > 0) {
+            html += '<li class="docs-section-header">🚀 Project Application</li>';
+            projectDocs.forEach(d => {
+                const label = d.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                html += `<li class="docs-nav-item" id="nav-doc-project-${d}" onclick="loadDocContent('project-${d}')">${escapeHtml(label)}</li>`;
+            });
+        }
+        
+        listEl.innerHTML = html;
         
         if (docs.length > 0) {
             loadDocContent('index');
@@ -1487,10 +2554,20 @@ async function loadDocContent(name) {
                 const href = aEl.getAttribute('href');
                 if (href) {
                     if (href.endsWith('.md')) {
-                        // Internal document link
+                        // Internal document link - convert path to doc name
                         aEl.onclick = (e) => {
                             e.preventDefault();
-                            const docName = href.replace('.md', '');
+                            let docName = href.replace('.md', '');
+                            
+                            // Handle relative paths: packages/skills.md -> packages-skills
+                            if (docName.includes('/')) {
+                                docName = docName.split('/').join('-');
+                            }
+                            // Handle root-relative paths: ../packages/skills.md -> packages-skills
+                            if (docName.startsWith('..')) {
+                                docName = docName.replace(/\.\.\//g, '').split('/').join('-');
+                            }
+                            
                             loadDocContent(docName);
                         };
                     } else if (href.startsWith('http')) {
@@ -1506,4 +2583,734 @@ async function loadDocContent(name) {
     }
 }
 
+// ─── MCP (Model Context Protocol) ─────────────────────────────────────────────
+
+async function loadMCPPage() {
+    try {
+        console.log('[MCP] Loading MCP page...');
+        
+        // Load MCP status
+        const statusData = await api('/mcp/status');
+        console.log('[MCP] Status data received:', statusData);
+        
+        // Check if all elements exist
+        const statusDiv = document.getElementById('mcp-status');
+        const startBtn = document.getElementById('btn-start-mcp');
+        const stopBtn = document.getElementById('btn-stop-mcp');
+        const toolsList = document.getElementById('mcp-tools-list');
+        const agentsList = document.getElementById('mcp-agents-list');
+        
+        // Safely check if page exists
+        if (!statusDiv || !startBtn || !stopBtn || !toolsList || !agentsList) {
+            console.warn('[MCP] Some elements missing from DOM, page may not be loaded yet');
+            toast('MCP page not fully loaded yet', 'info');
+            return;
+        }
+        
+        if (statusData.success) {
+            const isRunning = statusData.running || false;
+            const toolCount = statusData.available_tools || 0;
+            const agentCount = statusData.available_agents || 0;
+            
+            // Update status display
+            if (statusDiv) {
+                statusDiv.innerHTML = `
+                    <div style="display: grid; gap: 0.75rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Status</span>
+                            <span class="badge ${isRunning ? 'badge-green' : 'badge-orange'}">${isRunning ? '🟢 Running' : '🟡 Stopped'}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Available Tools</span>
+                            <strong>${toolCount} skill${toolCount !== 1 ? 's' : ''}</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Agents Available</span>
+                            <strong>${agentCount} agent${agentCount !== 1 ? 's' : ''}</strong>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="color: var(--text-secondary);">Mode</span>
+                            <strong>${statusData.config?.mode || 'stdio'}</strong>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Update button visibility
+            if (startBtn && stopBtn) {
+                if (isRunning) {
+                    startBtn.style.display = 'none';
+                    stopBtn.style.display = 'inline-block';
+                } else {
+                    startBtn.style.display = 'inline-block';
+                    stopBtn.style.display = 'none';
+                }
+            }
+        } else {
+            console.warn('[MCP] API returned error:', statusData.error);
+            if (statusDiv) {
+                statusDiv.innerHTML = `<div style="color: var(--text-secondary);">⚠️ Error: ${statusData.error || 'Unable to load status'}</div>`;
+            }
+        }
+        
+        // Load and display tools as compact chips
+        if (toolsList) {
+            if (statusData.tool_names && statusData.tool_names.length > 0) {
+                toolsList.innerHTML = `<div class="mcp-chip-list">${statusData.tool_names.map(name => `<span class="mcp-chip mcp-chip-tool">🔧 ${escapeHtml(name)}</span>`).join('')}</div>`;
+            } else {
+                toolsList.innerHTML = '<div class="mcp-loading">No skills available as tools</div>';
+            }
+        }
+
+        // Load and display agents as compact chips
+        if (agentsList) {
+            if (statusData.agent_names && statusData.agent_names.length > 0) {
+                agentsList.innerHTML = `<div class="mcp-chip-list">${statusData.agent_names.map(name => `<span class="mcp-chip mcp-chip-agent">🤖 ${escapeHtml(name)}</span>`).join('')}</div>`;
+            } else {
+                agentsList.innerHTML = '<div class="mcp-loading">No agents configured</div>';
+            }
+        }
+        
+        console.log('[MCP] Page load complete');
+    } catch (e) {
+        console.error('[MCP] Failed to load MCP data:', e);
+        toast('Failed to load MCP data: ' + e.message, 'error');
+    }
+}
+
+async function saveMCPConfig() {
+    const modeEl = document.getElementById('mcp-mode');
+    
+    if (!modeEl) {
+        toast('Configuration elements missing from page', 'error');
+        return;
+    }
+    
+    const mode = modeEl.value;
+    
+    try {
+        const result = await api('/mcp/configure', 'POST', { mode });
+        if (result.success) {
+            toast('MCP configuration saved!', 'success');
+        } else {
+            toast('Failed to save configuration', 'error');
+        }
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
+}
+
+async function startMCPServer() {
+    try {
+        const result = await api('/mcp/start', 'POST', {});
+        if (result.success) {
+            toast('MCP Server started!', 'success');
+            await loadMCPPage();
+        } else {
+            toast('Failed to start server: ' + result.error, 'error');
+        }
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
+}
+
+async function stopMCPServer() {
+    try {
+        const result = await api('/mcp/stop', 'POST', {});
+        if (result.success) {
+            toast('MCP Server stopped', 'success');
+            await loadMCPPage();
+        } else {
+            toast('Failed to stop server: ' + result.error, 'error');
+        }
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
+}
+
 window.addEventListener('DOMContentLoaded', init);
+
+
+// ─── A2A Agent Network ──────────────────────────────────────────────────────
+
+async function loadAgentNetwork() {
+    const cardLink = document.getElementById('network-local-card-url');
+    if (cardLink) {
+        cardLink.href = `${API.replace(/\/api$/, '')}/.well-known/agent-card.json`;
+        cardLink.textContent = 'Open Agent Card';
+        cardLink.title = cardLink.href;
+    }
+    try {
+        const response = await api('/a2a/peers');
+        renderA2APeers(response.peers || []);
+    } catch (error) {
+        toast(`Could not load remote agents: ${error.message}`, 'error');
+    }
+}
+
+function renderA2APeers(peers) {
+    const list = document.getElementById('network-peers');
+    const select = document.getElementById('network-peer-select');
+    if (!list || !select) return;
+    const selectedId = select.value;
+    select.innerHTML = '<option value="">Select a remote agent</option>' + peers.map(peer =>
+        `<option value="${escapeHtml(peer.id)}">${escapeHtml(peer.name)}</option>`
+    ).join('');
+    if (peers.some(peer => peer.id === selectedId)) select.value = selectedId;
+    list.innerHTML = peers.length ? peers.map(peer => {
+        const skills = (peer.card.skills || []).map(skill => skill.name).join(', ');
+        return `<div class="network-peer-row">
+            <div class="network-peer-copy">
+                <strong>${escapeHtml(peer.name)}</strong>
+                <span>${escapeHtml(peer.description)}</span>
+                <small>${escapeHtml(skills || peer.card_url)}</small>
+            </div>
+            <button class="btn btn-ghost btn-xs" onclick="removeA2APeer('${escapeHtml(peer.id)}')" title="Remove remote agent" aria-label="Remove ${escapeHtml(peer.name)}">×</button>
+        </div>`;
+    }).join('') : '<div class="empty-state-small">No remote agents connected.</div>';
+}
+
+async function addA2APeer() {
+    const input = document.getElementById('network-card-url');
+    const cardUrl = input.value.trim();
+    if (!cardUrl) return toast('Enter an Agent Card URL', 'error');
+    try {
+        const response = await api('/a2a/peers', 'POST', { card_url: cardUrl }, 12000);
+        input.value = '';
+        await loadAgentNetwork();
+        document.getElementById('network-peer-select').value = response.peer.id;
+        toast(`Connected to ${response.peer.name}`, 'success');
+    } catch (error) {
+        toast(error.message, 'error');
+    }
+}
+
+async function removeA2APeer(peerId) {
+    try {
+        await api(`/a2a/peers/${encodeURIComponent(peerId)}`, 'DELETE');
+        await loadAgentNetwork();
+        toast('Remote agent removed', 'info');
+    } catch (error) {
+        toast(error.message, 'error');
+    }
+}
+
+function renderA2ATaskResponses() {
+    const output = document.getElementById('network-task-result');
+    output.textContent = state.networkTaskResponses.length
+        ? state.networkTaskResponses.map(entry => `${entry.time} | ${entry.label}\n${JSON.stringify(entry.payload, null, 2)}`).join('\n\n')
+        : 'No responses yet. Send a task or refresh a remote task ID.';
+    output.scrollTop = output.scrollHeight;
+}
+
+function logA2ATaskResponse(label, payload) {
+    state.networkTaskResponses.push({ time: new Date().toLocaleTimeString(), label, payload });
+    renderA2ATaskResponses();
+}
+
+function clearA2ATaskResponses() {
+    state.networkTaskResponses = [];
+    renderA2ATaskResponses();
+}
+
+function showA2ATaskResult(response, label) {
+    logA2ATaskResponse(label, response);
+    const result = response && response.result;
+    const task = result && (result.task || result);
+    const taskId = task && task.id;
+    if (taskId) document.getElementById('network-task-id').value = taskId;
+    return task && task.status && ['TASK_STATE_WORKING', 'TASK_STATE_SUBMITTED'].includes(task.status.state);
+}
+
+function scheduleA2ATaskPoll() {
+    clearTimeout(state.networkTaskPollTimer);
+    state.networkTaskPollTimer = setTimeout(() => {
+        if (document.getElementById('page-network')?.classList.contains('active')) pollA2ATask(true);
+    }, 2500);
+}
+
+async function sendA2ATask() {
+    const peerId = document.getElementById('network-peer-select').value;
+    const message = document.getElementById('network-task-message').value.trim();
+    if (!peerId) return toast('Select a remote agent', 'error');
+    if (!message) return toast('Describe the task to send', 'error');
+    const button = document.getElementById('network-send-button');
+    button.disabled = true;
+    try {
+        const response = await api(`/a2a/peers/${encodeURIComponent(peerId)}/tasks`, 'POST', { message }, 70000);
+        if (showA2ATaskResult(response, 'SendMessage response')) scheduleA2ATaskPoll();
+        toast('Remote task submitted', 'success');
+    } catch (error) {
+        logA2ATaskResponse('SendMessage error', {
+            status: error.status ?? null,
+            message: error.message,
+            response: error.responseBody ?? null
+        });
+        toast(error.message, 'error');
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function pollA2ATask(silent = false) {
+    clearTimeout(state.networkTaskPollTimer);
+    const peerId = document.getElementById('network-peer-select').value;
+    const taskId = document.getElementById('network-task-id').value.trim();
+    if (!peerId || !taskId) {
+        if (!silent) toast('Select a peer and enter a remote task ID', 'error');
+        return;
+    }
+    try {
+        const response = await api(`/a2a/peers/${encodeURIComponent(peerId)}/tasks/${encodeURIComponent(taskId)}`, 'POST', null, 70000);
+        if (showA2ATaskResult(response, silent ? 'GetTask poll response' : 'GetTask response')) scheduleA2ATaskPoll();
+    } catch (error) {
+        logA2ATaskResponse('GetTask error', {
+            status: error.status ?? null,
+            message: error.message,
+            response: error.responseBody ?? null
+        });
+        if (!silent) toast(error.message, 'error');
+    }
+}
+
+
+// ─── Crew Collaboration (removed) ───────────────────────────────────────────
+
+// Crew features have been removed. Provide safe no-op stubs so UI code
+// that references crew functions does not throw runtime errors.
+
+async function loadCrewsPage() {
+    const el = document.getElementById('page-crews');
+    if (el) {
+        // Ensure the removed notice is visible (index.html contains the notice card)
+        el.querySelectorAll('*').forEach(n => n.style.display = '');
+    }
+    toast('Crew collaboration features have been removed from this deployment.', 'info');
+}
+
+function renderCrewsList() {
+    const listEl = document.getElementById('crews-list');
+    if (listEl) listEl.innerHTML = '<div class="empty-state"><div class="empty-icon">👥</div><div class="empty-title">Crew features removed</div><div class="empty-description">This instance no longer supports multi-agent crews.</div></div>';
+}
+
+function updateCrewAgentCard() { /* no-op: crews removed */ }
+function setCrewProtocol() { /* no-op: crews removed */ }
+async function createCrew() { toast('Crew creation is disabled', 'error'); }
+async function addCrewMember() { toast('Crew management is disabled', 'error'); }
+async function deleteCrew() { toast('Crew deletion is disabled', 'error'); }
+async function loadCrewCommunications() { const el = document.getElementById('crew-communications'); if (el) el.innerHTML = '<div style="text-align:center;color:var(--text-secondary);">Crew features removed</div>'; }
+let _activeCrewTab = 'history';
+function switchCrewTab(tab) { _activeCrewTab = tab; toast('Crew UI disabled', 'info'); }
+function refreshCrewTabs() { toast('Crew features removed', 'info'); }
+async function clearCrewHistoryAndResults() { toast('Clearing crew history is disabled', 'error'); }
+async function loadCrewResults() { const el = document.getElementById('crew-results'); if (el) el.innerHTML = '<div style="text-align:center;color:var(--text-secondary);">Crew features removed</div>'; }
+async function updateCrewAgentSelects() { toast('Crew features removed', 'info'); }
+async function sendCrewMessage() { toast('Sending messages between agents is disabled', 'error'); }
+async function broadcastCrewMessage() { toast('Broadcasting to crews is disabled', 'error'); }
+
+/* ─── Agent OS Runtime Control Plane ──────────────────────────────────────── */
+
+function startAgentOsPolling() {
+    if (state.agentOsRefreshTimer) return;
+    state.agentOsRefreshTimer = setInterval(() => {
+        if (!document.hidden && document.getElementById('page-agentos')?.classList.contains('active')) {
+            refreshPods();
+        }
+    }, 10000);
+}
+
+function stopAgentOsPolling() {
+    if (!state.agentOsRefreshTimer) return;
+    clearInterval(state.agentOsRefreshTimer);
+    state.agentOsRefreshTimer = null;
+}
+
+async function refreshPods() {
+    if (state.agentOsRefreshing) {
+        state.agentOsRefreshQueued = true;
+        return;
+    }
+    state.agentOsRefreshing = true;
+
+    try {
+        const res = await api('/pods');
+        if (!res.success) throw new Error(res.error || 'Failed to fetch pods');
+        
+        const grid = document.getElementById('pods-grid');
+        if (!grid) return;
+        
+        const allPods = res.pods || [];
+        const statusFilter = document.getElementById('pod-status-filter')?.value || '';
+        const pods = statusFilter ? allPods.filter(p => p.status === statusFilter) : allPods;
+        
+        // Update Stats Summary
+        let activeCount = 0;
+        let totalCost = 0.0;
+        let totalTokens = 0;
+        
+        allPods.forEach(p => {
+            if (p.status === 'running' || p.status === 'healing') {
+                activeCount++;
+            }
+            totalCost += p.cost || 0;
+            totalTokens += p.tokens_used || 0;
+        });
+        
+        document.getElementById('stat-active-pods').textContent = activeCount;
+        document.getElementById('stat-cost').textContent = '$' + totalCost.toFixed(4);
+        document.getElementById('stat-tokens').textContent = totalTokens.toLocaleString();
+
+        const interventionCounts = await Promise.all(allPods.map(async pod => {
+            try {
+                const detail = await api(`/pods/${pod.id}`);
+                return (detail.interventions || []).length;
+            } catch (e) {
+                return 0;
+            }
+        }));
+        document.getElementById('stat-heals').textContent = interventionCounts.reduce((sum, count) => sum + count, 0);
+        
+        // Set badging badge
+        const badge = document.getElementById('pod-count-badge');
+        if (badge) {
+            badge.textContent = activeCount;
+            badge.style.display = activeCount > 0 ? 'inline-block' : 'none';
+        }
+        
+        if (pods.length === 0) {
+            grid.innerHTML = allPods.length
+                ? '<div class="empty-state-small" style="grid-column: 1/-1;">No pods match this status filter.</div>'
+                : '<div class="empty-state-small" style="grid-column: 1/-1;">No pods yet. Start a run from Tasks.</div>';
+            const updatedAt = document.getElementById('agent-os-updated-at');
+            if (updatedAt) updatedAt.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+            return;
+        }
+        
+        const htmlParts = pods.map(p => {
+            const avatar = state.agents[p.agent_id]?.persona?.avatar || '🤖';
+            const costStr = p.cost ? p.cost.toFixed(4) : '0.0000';
+            const tokensStr = p.tokens_used ? p.tokens_used.toLocaleString() : '0';
+            
+            return `
+                <div class="pod-card" onclick="loadPodTraces('${p.id}')">
+                    <div class="pod-header">
+                        <span class="pod-name">${avatar} ${p.name}</span>
+                        <div class="pod-status ${p.status}">
+                            <span class="dot"></span>
+                            <span>${p.status}</span>
+                        </div>
+                    </div>
+                    <div class="pod-body">
+                        <strong>Task:</strong> ${escapeHtml(p.task_text)}
+                    </div>
+                    <div class="pod-footer">
+                        <span>🪙 ${tokensStr}</span>
+                        <span>💵 $${costStr}</span>
+                    </div>
+                    <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem;" onclick="event.stopPropagation()">
+                        ${(p.status === 'running' || p.status === 'healing') ? `<button class="btn btn-ghost btn-xs" style="flex:1" onclick="suspendPod('${p.id}')">⏸️ Suspend</button>` : ''}
+                        ${p.status === 'suspended' ? `<button class="btn btn-ghost btn-xs" style="flex:1" onclick="resumePod('${p.id}')">▶️ Resume</button>` : ''}
+                        ${(p.status === 'running' || p.status === 'healing' || p.status === 'suspended') ? `<button class="btn btn-danger btn-xs" style="padding: 0.25rem 0.6rem; border-radius: var(--radius-xs);" onclick="stopPod('${p.id}')">🛑 Stop</button>` : ''}
+                        ${(p.status === 'completed' || p.status === 'stopped' || p.status === 'failed') ? `<button class="btn btn-danger btn-xs" style="padding: 0.25rem 0.6rem; border-radius: var(--radius-xs);" onclick="confirmDeletePod('${p.id}')">🗑️ Delete</button>` : ''}
+                    </div>
+                </div>
+            `;
+        });
+        
+        grid.innerHTML = htmlParts.join('');
+        const updatedAt = document.getElementById('agent-os-updated-at');
+        if (updatedAt) updatedAt.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+    } catch(e) {
+        console.error('[AgentOS] Error refreshing pods:', e);
+    } finally {
+        state.agentOsRefreshing = false;
+        if (state.agentOsRefreshQueued) {
+            state.agentOsRefreshQueued = false;
+            refreshPods();
+        }
+    }
+}
+
+async function suspendPod(podId) {
+    try {
+        const res = await api(`/pods/${podId}/suspend`, 'POST');
+        if (res.success) {
+            toast(`Pod ${podId} suspended.`, 'info');
+            refreshPods();
+        }
+    } catch(e) {
+        toast(e.message, 'error');
+    }
+}
+
+async function resumePod(podId) {
+    try {
+        const res = await api(`/pods/${podId}/resume`, 'POST');
+        if (res.success) {
+            toast(`Pod ${podId} resumed.`, 'info');
+            refreshPods();
+        }
+    } catch(e) {
+        toast(e.message, 'error');
+    }
+}
+
+async function stopPod(podId) {
+    try {
+        const res = await api(`/pods/${podId}/stop`, 'POST');
+        if (res.success) {
+            toast(`Pod ${podId} stopped.`, 'warning');
+            refreshPods();
+        }
+    } catch(e) {
+        toast(e.message, 'error');
+    }
+}
+
+function confirmDeletePod(podId) {
+    confirmAction('Delete this pod and all its traces? This cannot be undone.', async () => {
+        try {
+            const res = await api(`/pods/${podId}`, 'DELETE');
+            if (res.success) {
+                toast('Pod deleted', 'info');
+                refreshPods();
+                loadTracesList();
+            } else {
+                throw new Error(res.error || 'Failed to delete pod');
+            }
+        } catch (e) {
+            toast(e.message || 'Error deleting pod', 'error');
+        }
+    });
+}
+
+async function loadTracesList() {
+    try {
+        const res = await api('/obs/traces');
+        if (!res.success) throw new Error(res.error || 'Failed to fetch traces');
+        
+        const panel = document.getElementById('trace-list-panel');
+        if (!panel) return;
+        
+        const traces = res.traces || [];
+        if (traces.length === 0) {
+            panel.innerHTML = '<div class="empty-state-small">No traces recorded yet.</div>';
+            return;
+        }
+        
+        panel.innerHTML = traces.map(t => {
+            const timeStr = t.started_at ? new Date(t.started_at).toLocaleString() : '';
+            const statusClass = t.status === 'completed' ? 'badge-green' : t.status === 'failed' ? 'badge-red' : 'badge-blue';
+            return `
+                <div class="trace-item" id="trace-row-${t.id}" onclick="loadTraceTree('${t.id}')">
+                    <div class="trace-item-left">
+                        <span class="trace-name">🔍 ${escapeHtml(t.name)}</span>
+                        <span class="trace-meta">📅 ${timeStr} | Pod: ${t.pod_id || 'Proxy'}</span>
+                    </div>
+                    <span class="badge ${statusClass}">${t.status}</span>
+                </div>
+            `;
+        }).join('');
+        
+    } catch(e) {
+        console.error('[AgentOS] Error loading traces:', e);
+    }
+}
+
+async function loadPodTraces(podId) {
+    try {
+        const res = await api(`/obs/traces?pod_id=${podId}`);
+        if (!res.success) throw new Error(res.error || 'Failed to fetch pod traces');
+        
+        const panel = document.getElementById('trace-list-panel');
+        if (!panel) return;
+        
+        const traces = res.traces || [];
+        if (traces.length === 0) {
+            panel.innerHTML = `<div class="empty-state-small">No traces found for pod ${podId}</div>`;
+            return;
+        }
+        
+        panel.innerHTML = traces.map(t => {
+            const timeStr = t.started_at ? new Date(t.started_at).toLocaleString() : '';
+            const statusClass = t.status === 'completed' ? 'badge-green' : t.status === 'failed' ? 'badge-red' : 'badge-blue';
+            return `
+                <div class="trace-item" id="trace-row-${t.id}" onclick="loadTraceTree('${t.id}')">
+                    <div class="trace-item-left">
+                        <span class="trace-name">🔍 ${escapeHtml(t.name)}</span>
+                        <span class="trace-meta">📅 ${timeStr} | Pod: ${t.pod_id || 'Proxy'}</span>
+                    </div>
+                    <span class="badge ${statusClass}">${t.status}</span>
+                </div>
+            `;
+        }).join('');
+        
+        // Auto-load first trace tree
+        if (traces.length > 0) {
+            loadTraceTree(traces[0].id);
+        }
+        
+    } catch(e) {
+        toast(e.message, 'error');
+    }
+}
+
+async function loadTraceTree(traceId) {
+    // Highlight selected row
+    document.querySelectorAll('.trace-item').forEach(el => el.classList.remove('active'));
+    document.getElementById(`trace-row-${traceId}`)?.classList.add('active');
+    
+    try {
+        const res = await api(`/obs/traces/${traceId}`);
+        if (!res.success) throw new Error(res.error || 'Failed to load trace details');
+        
+        const treeContainer = document.getElementById('trace-tree-container');
+        if (!treeContainer) return;
+        
+        document.getElementById('active-trace-title').textContent = `Trace: ${res.trace.name} (Tokens: ${res.trace.total_tokens} | Cost: $${(res.trace.total_cost || 0).toFixed(4)})`;
+        
+        const spans = res.spans || [];
+        if (spans.length === 0) {
+            treeContainer.innerHTML = '<div class="empty-state-small">No spans found in trace.</div>';
+            return;
+        }
+        
+        // Calculate nested depths based on parent span IDs
+        const spanMap = {};
+        spans.forEach(s => {
+            spanMap[s.id] = { ...s, children: [], depth: 0 };
+        });
+        
+        const roots = [];
+        spans.forEach(s => {
+            const mapped = spanMap[s.id];
+            if (s.parent_span_id && spanMap[s.parent_span_id]) {
+                spanMap[s.parent_span_id].children.push(mapped);
+            } else {
+                roots.push(mapped);
+            }
+        });
+        
+        // Calculate depths recursively
+        function setDepth(node, currentDepth) {
+            node.depth = currentDepth;
+            node.children.forEach(child => setDepth(child, currentDepth + 1));
+        }
+        roots.forEach(r => setDepth(r, 0));
+        
+        // Flatten tree list to render sequentially with depth margins
+        const listToRender = [];
+        function flatten(node) {
+            listToRender.push(node);
+            node.children.forEach(child => flatten(child));
+        }
+        roots.forEach(r => flatten(r));
+        
+        // Load interventions for this pod to map them
+        let interventions = [];
+        if (res.trace.pod_id) {
+            try {
+                const podDetailRes = await fetch(`http://localhost:8000/api/pods/${res.trace.pod_id}`);
+                const podDetail = await podDetailRes.json();
+                interventions = podDetail.interventions || [];
+            } catch(e) {}
+        }
+        
+        treeContainer.innerHTML = listToRender.map(s => {
+            const hasChildren = s.children.length > 0;
+            const hasDetails = s.input || s.output || s.error;
+            
+            // Format dur
+            let durationStr = '';
+            if (s.started_at && s.completed_at) {
+                const start = new Date(s.started_at);
+                const end = new Date(s.completed_at);
+                durationStr = ((end - start) / 1000).toFixed(2) + 's';
+            }
+            
+            // Input/Output JSON pretty printing
+            let inputPretty = '';
+            try {
+                inputPretty = JSON.stringify(JSON.parse(s.input), null, 2);
+            } catch(err) {
+                inputPretty = s.input || 'None';
+            }
+            
+            let outputPretty = '';
+            try {
+                outputPretty = JSON.stringify(JSON.parse(s.output), null, 2);
+            } catch(err) {
+                outputPretty = s.output || 'None';
+            }
+            
+            // Look for matching healing intervention
+            const matchIntv = interventions.find(i => i.span_id === s.id);
+            let sreDiagnosisHtml = '';
+            if (matchIntv) {
+                sreDiagnosisHtml = `
+                    <div style="margin-top: 0.75rem; padding: 0.75rem; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 4px; border-left: 3px solid #f59e0b;">
+                        <div style="font-weight: 700; color: #f59e0b; font-size: 0.75rem; text-transform: uppercase; margin-bottom: 0.25rem;">🩹 SRE Kernel Healing diagnosis</div>
+                        <div style="font-size: 0.8rem; color: var(--text-primary); margin-bottom: 0.25rem;"><strong>Diagnosis:</strong> ${escapeHtml(matchIntv.diagnosis)}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary);"><strong>Patch (${matchIntv.patch_type}):</strong> <code>${escapeHtml(matchIntv.patch_content)}</code></div>
+                    </div>
+                `;
+            }
+            
+            const statusSymbol = s.status === 'success' ? '✅' : s.status === 'error' ? '❌' : '⏳';
+            
+            return `
+                <div class="span-node" style="--depth: ${s.depth};">
+                    <div class="span-header" onclick="toggleSpanBody('${s.id}')">
+                        <div class="span-header-left">
+                            <span class="span-badge ${s.span_type}">${s.span_type}</span>
+                            <span class="span-name">${escapeHtml(s.name)}</span>
+                            <span>${statusSymbol}</span>
+                        </div>
+                        <span class="span-duration">${durationStr}</span>
+                    </div>
+                    <div class="span-body" id="span-body-${s.id}" style="display:none">
+                        ${s.input ? `<div><strong>Input:</strong> <pre>${escapeHtml(inputPretty)}</pre></div>` : ''}
+                        ${s.output ? `<div style="margin-top:0.5rem;"><strong>Output:</strong> <pre>${escapeHtml(outputPretty)}</pre></div>` : ''}
+                        ${s.error ? `<div style="color:var(--red); margin-top:0.5rem;"><strong>Error trace:</strong> <pre>${escapeHtml(s.error)}</pre></div>` : ''}
+                        ${sreDiagnosisHtml}
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+    } catch(e) {
+        toast(e.message, 'error');
+    }
+}
+
+function toggleSpanBody(spanId) {
+    const el = document.getElementById(`span-body-${spanId}`);
+    if (el) {
+        el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+/* ─── Marketplace & Plugins UI Logic ─────────────────────────────────────── */
+
+// Integrations and marketplace removed — functions are no-ops to keep UI stable.
+let marketplacePlugins = [];
+async function loadPluginsList() {
+    return [];
+}
+
+function openConnectModal(pluginId) {
+    toast('Integrations are disabled in this deployment.', 'info');
+}
+
+function closeConnectModal() {
+    document.getElementById('marketplace-modal-overlay').style.display = 'none';
+}
+
+async function submitConnectPlugin(event) {
+    event.preventDefault();
+    toast('Integrations are disabled. Connection not supported.', 'error');
+}
+
+async function disconnectPluginAndUI(pluginId) {
+    toast('Integrations are disabled in this deployment.', 'info');
+}

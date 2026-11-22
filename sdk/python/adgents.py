@@ -24,6 +24,7 @@ Usage:
 import httpx
 import json
 import time
+import os
 from typing import Optional, List, Dict, Any, Callable
 from dataclasses import dataclass
 
@@ -73,21 +74,27 @@ class Agent:
         # Start the task
         res = self._client._post("/tasks", {"agent_id": self.id, "task": task})
         task_id = res.get("task_id")
-        
-        # For SDK simplicity, we just run synchronously via chat with task framing
-        # In production this would use WebSocket or polling
-        response = self.chat(
-            f"Please complete this task autonomously, using your skills: {task}"
-        )
-        
-        return AgentTask(
-            id=task_id or "local",
-            status="completed",
-            steps=[],
-            result=response,
-            error=None,
-            description=task
-        )
+        if not task_id:
+            raise RuntimeError("Task API did not return a task_id")
+
+        deadline = time.monotonic() + max_wait
+        while True:
+            task_data = self._client._get(f"/tasks/{task_id}")
+            status = task_data.get("status", "running")
+            if status not in ("pending", "running", "started"):
+                return AgentTask(
+                    id=task_id,
+                    status=status,
+                    steps=task_data.get("steps", []),
+                    result=task_data.get("result"),
+                    error=task_data.get("error"),
+                    description=task_data.get("task_text", task),
+                )
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"Task '{task_id}' did not finish within {max_wait} seconds")
+            time.sleep(min(max(poll_interval, 0.05), remaining))
     
     def learn(self, fact: str, topic: str = "general", importance: float = 0.7) -> str:
         """Teach the agent a new fact."""
@@ -134,10 +141,13 @@ class ADgents:
         print(agent.chat("Explain quantum computing"))
     """
     
-    def __init__(self, api_url: str = "http://localhost:8000", timeout: float = 60.0):
+    def __init__(self, api_url: str = "http://localhost:8000", timeout: float = 60.0,
+                 api_token: str = None):
         self.api_url = api_url.rstrip("/") + "/api"
         self.timeout = timeout
-        self._client = httpx.Client(timeout=timeout)
+        api_token = api_token or os.getenv("ADGENTS_API_TOKEN")
+        headers = {"Authorization": f"Bearer {api_token}"} if api_token else {}
+        self._client = httpx.Client(timeout=timeout, headers=headers)
     
     def create_agent(self, template: str = None, persona: Dict = None) -> Agent:
         """

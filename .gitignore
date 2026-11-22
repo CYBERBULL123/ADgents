@@ -26,6 +26,13 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Private local planning notes
+ACTION_NOW.md
+OPEN_SOURCE_SECURITY.md
+realworld/ADGENTS_DEEP_ANALYSIS.md
+realworld/
+
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -174,3 +181,4 @@ cython_debug/
 # Data / ADgents Specific
 data/
 *.log
+.agents

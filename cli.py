@@ -13,7 +13,9 @@ Usage:
 import sys
 import json
 import time
+import os
 from pathlib import Path
+from typing import Optional
 
 # Add root to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -37,12 +39,21 @@ console = Console()
 
 @app.command()
 def serve(
-    host: str = typer.Option("0.0.0.0", help="Host to bind"),
+    host: Optional[str] = typer.Option(None, help="Host to bind (default: API_HOST or 127.0.0.1)"),
     port: int = typer.Option(8000, help="Port to listen on"),
     reload: bool = typer.Option(False, help="Enable auto-reload")
 ):
     """🚀 Start the ADgents API server."""
     import uvicorn
+    from core.config import get_api_host, is_loopback_host
+
+    host = host or get_api_host()
+    if not is_loopback_host(host):
+        if os.getenv("ADGENTS_API_TOKEN"):
+            console.print(f"API is binding to {host}; protected API routes require Bearer authentication.")
+        else:
+            console.print(f"[bold red]WARNING:[/bold red] API is binding to {host} without ADGENTS_API_TOKEN; protected requests will fail closed.")
+
     console.print(Panel.fit(
         "[bold cyan]⚡ ADgents Server Starting[/bold cyan]\n\n"
         f"[green]API:[/green] http://{host}:{port}\n"

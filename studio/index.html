@@ -11,13 +11,32 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="/studio/style.css?v=6" />
     <!-- Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 </head>
 
 <body>
+    <!-- Loading Overlay -->
+    <div id="app-loading-overlay" style="position: fixed; inset: 0; background: rgba(6, 8, 17, 0.95); z-index: 10000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(6px);">
+        <div style="text-align: center; color: #e0e0e0; font-family: 'Inter', sans-serif;">
+            <div style="font-size: 3rem; margin-bottom: 1.5rem; animation: pulse 1.5s ease-in-out infinite;">⚡</div>
+            <div style="font-size: 1.5rem; font-weight: 600; margin-bottom: 0.5rem;">ADgents Studio</div>
+            <div style="color: #8b8ba8; margin-bottom: 1.5rem;">Initializing application...</div>
+            <div style="width: 200px; height: 4px; background: rgba(255, 255, 255, 0.1); border-radius: 2px; overflow: hidden;">
+                <div style="width: 30%; height: 100%; background: linear-gradient(90deg, #7c3aed, #2563eb); animation: slide 1.5s ease-in-out infinite;"></div>
+            </div>
+            <div style="margin-top: 1.5rem; font-size: 0.85rem; color: #4f4f6e;">
+                <div id="loading-status">Connecting to API...</div>
+            </div>
+        </div>
+        <style>
+            @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+            @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
+        </style>
+    </div>
+
     <!-- Animated background -->
     <div class="bg-grid"></div>
     <div class="bg-glow bg-glow-1"></div>
@@ -62,6 +81,12 @@
             <span class="nav-icon">⚡</span>
             <span>Tasks</span>
         </a>
+        <a class="nav-item" data-page="agentos" onclick="navigate('agentos');closeSidebar()">
+            <span class="nav-icon">🪐</span>
+            <span>Agent OS</span>
+            <span class="nav-badge" id="pod-count-badge" style="display:none">0</span>
+        </a>
+        <!-- Marketplace removed -->
         <a class="nav-item" data-page="history" onclick="navigate('history');closeSidebar()">
             <span class="nav-icon">📜</span>
             <span>History</span>
@@ -71,9 +96,24 @@
             <span class="nav-icon">🧠</span>
             <span>Memory</span>
         </a>
-        <a class="nav-item" data-page="skills" onclick="navigate('skills');closeSidebar()">
+        <a class="nav-item" data-page="tools" onclick="navigate('tools');closeSidebar()">
             <span class="nav-icon">🛠️</span>
-            <span>Skills</span>
+            <span>Tools & Skills</span>
+        </a>
+        <a class="nav-item" data-page="mcp" onclick="navigate('mcp');closeSidebar()">
+            <span class="nav-icon">🔗</span>
+            <span>MCP Server</span>
+        </a>
+        <a class="nav-item" data-page="network" onclick="navigate('network');closeSidebar()">
+            <span class="nav-icon">🌐</span>
+            <span>Agent Network</span>
+        </a>
+
+        <!-- Crew Collaboration removed -->
+        <a class="nav-item" data-page="files" onclick="navigate('files');closeSidebar()">
+            <span class="nav-icon">📁</span>
+            <span>Files</span>
+            <span class="nav-badge" id="files-count-badge" style="display:none">0</span>
         </a>
 
         <div class="sidebar-section-label">Settings</div>
@@ -131,7 +171,7 @@
                     <div class="stat-card">
                         <div class="stat-icon">⚡</div>
                         <div class="stat-value" id="stat-skills">0</div>
-                        <div class="stat-label">Skills Available</div>
+                        <div class="stat-label">Tools Available</div>
                         <div class="stat-trend">↑ Tools ready</div>
                     </div>
                     <div class="stat-card">
@@ -193,20 +233,29 @@
                         </div>
                         <div class="status-list" id="system-status-list">
                             <div class="status-item">
-                                <span class="status-name">API Server</span>
+                                <span class="status-name">🔴 API Server</span>
                                 <span class="badge badge-green" id="status-api">Connecting...</span>
                             </div>
                             <div class="status-item">
-                                <span class="status-name">LLM Providers</span>
-                                <span class="badge badge-blue" id="status-llm">—</span>
+                                <span class="status-name">🧠 Memory Database</span>
+                                <span class="badge badge-green" id="status-db">SQLite Ready</span>
                             </div>
                             <div class="status-item">
-                                <span class="status-name">Memory DB</span>
-                                <span class="badge badge-green">SQLite Ready</span>
+                                <span class="status-name">⚙️ Skills Engine</span>
+                                <span class="badge badge-green" id="status-skills-engine">Active</span>
                             </div>
                             <div class="status-item">
-                                <span class="status-name">Skills Engine</span>
-                                <span class="badge badge-green">Active</span>
+                                <span class="status-name">🌐 LLM Providers</span>
+                                <span class="badge badge-blue" id="status-llm">Loading...</span>
+                            </div>
+                        </div>
+
+                        <div class="card" style="margin-top:1.5rem; background: var(--bg-card); border: 1px solid var(--border);">
+                            <div class="card-header">
+                                <h3>LLM Provider Details</h3>
+                            </div>
+                            <div class="llm-status-list" id="llm-status-details" style="font-size: 0.85rem; line-height: 1.6;">
+                                <div class="status-item">Loading provider information...</div>
                             </div>
                         </div>
 
@@ -222,6 +271,10 @@
 
             <!-- ── AGENTS ── -->
             <section class="page" id="page-agents">
+                <div style="margin-bottom: 1.5rem;">
+                    <h2 style="margin: 0 0 0.5rem 0; color: var(--text-primary);">Your Agents</h2>
+                    <p style="margin: 0; font-size: 0.9rem; color: var(--text-secondary);">Manage and organize all your AI agents</p>
+                </div>
                 <div class="agents-toolbar">
                     <input type="text" class="search-input" placeholder="🔍 Search agents..." id="agent-search"
                         oninput="filterAgents(this.value)" />
@@ -323,8 +376,16 @@
                                 </div>
 
                                 <div class="form-group full-width">
-                                    <label>Available Skills</label>
+                                    <label>Available Tools</label>
                                     <div class="skills-checkbox-grid" id="build-skills-grid"></div>
+                                </div>
+                                <div class="form-group full-width">
+                                    <label>Agent Skills <span class="form-hint-inline">Markdown workflows</span></label>
+                                    <div class="skills-checkbox-grid" id="build-agent-skills-grid"></div>
+                                    <div class="builder-skill-help">
+                                        <span>Select the workflows this agent should follow.</span>
+                                        <button class="btn btn-ghost btn-xs" type="button" onclick="openAgentSkillManager()">Manage skills</button>
+                                    </div>
                                 </div>
                             </div>
 
@@ -381,6 +442,9 @@
                                 </button>
                             </div>
                             <div class="chat-actions">
+                                <label class="btn btn-ghost btn-xs" style="display:inline-flex;align-items:center;gap:.4rem;cursor:pointer">
+                                    <input id="chat-autonomous" type="checkbox" /> Autonomous task (creates a pod)
+                                </label>
                                 <button class="btn btn-ghost btn-xs" onclick="runAutonomousTask()">⚡ Run Task</button>
                                 <button class="btn btn-ghost btn-xs" onclick="resetChatSession()">🔄 New
                                     Session</button>
@@ -392,78 +456,191 @@
 
             <!-- ── TASKS ── -->
             <section class="page" id="page-tasks">
-
-                <!-- Control bar -->
-                <div class="task-control-bar">
-                    <div class="task-agent-group">
-                        <label class="task-label">Agent</label>
-                        <select id="task-agent-select" class="task-select">
-                            <option value="">— Select Agent —</option>
-                        </select>
-                    </div>
-
-                    <div class="task-input-group">
-                        <label class="task-label">Task Description</label>
-                        <textarea id="task-description" class="task-textarea"
-                            placeholder="Describe the task — e.g. Research the latest AI trends and write a summary report"
-                            rows="3"></textarea>
-                    </div>
-
-                    <div class="task-options-group">
-                        <div class="task-iter-row">
-                            <label class="task-label">Iterations: <strong id="max-iter-val">10</strong></label>
-                            <input type="range" id="task-max-iter" min="3" max="20" value="10"
-                                oninput="document.getElementById('max-iter-val').textContent=this.value" />
-                            <div class="task-iter-marks"><span>3</span><span>20</span></div>
+                <div class="two-col">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Run an Autonomous Task</h3>
                         </div>
-                        <button class="btn btn-primary task-run-btn" onclick="startTask()">
-                            ⚡ Run Autonomous Task
-                        </button>
+                        <div class="form-group" style="margin-bottom: 1rem;">
+                            <label for="task-agent-select">Agent</label>
+                            <select id="task-agent-select" style="width: 100%;">
+                                <option value="">— Select Agent —</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 1rem;">
+                            <label for="task-description">Task description</label>
+                            <textarea id="task-description" rows="6" placeholder="Describe the work for the agent..." style="width: 100%; resize: vertical;"></textarea>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 1rem;">
+                            <label for="task-max-iter">Maximum iterations</label>
+                            <input id="task-max-iter" type="number" value="10" min="1" max="30" />
+                            <small style="font-size: 0.75rem; color: var(--text-muted);">Choose between 1 and 30 steps.</small>
+                        </div>
+                        <button class="btn btn-primary task-run-btn" onclick="startTask()">⚡ Run Task</button>
                     </div>
-                </div>
 
-                <!-- Live task feed -->
-                <div class="task-feed-card">
-                    <div class="task-feed-header">
-                        <div class="task-feed-title">
-                            <span id="task-feed-icon">📋</span>
-                            <span id="task-feed-heading">Task Steps</span>
-                        </div>
-                        <div class="task-feed-meta">
-                            <span class="badge badge-blue" id="task-status-badge" style="display:none">Running</span>
-                            <button class="btn btn-ghost btn-xs" onclick="clearTaskFeed()">Clear</button>
-                        </div>
-                    </div>
-                    <div class="task-steps" id="task-steps">
-                        <div class="task-empty-state">
-                            <div class="task-empty-icon">⚡</div>
-                            <div class="task-empty-title">Ready for Tasks</div>
-                            <div class="task-empty-desc">Select an agent, describe the task, then hit Run.<br>You'll see
-                                the agent's thoughts and actions here in real-time.</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ── TASK RESULT PANEL ── -->
-                <div class="task-result-panel" id="task-result-panel" style="display:none">
-                    <div class="task-result-header">
-                        <div class="task-result-title">
-                            <span class="task-result-icon">✅</span>
-                            <div>
-                                <div class="task-result-label">Task Complete</div>
-                                <div class="task-result-agent" id="task-result-agent-name"></div>
+                    <div class="task-feed-card">
+                        <div class="task-feed-header">
+                            <div class="task-feed-title"><span>⚡</span><span id="task-feed-heading">Task Steps</span></div>
+                            <div class="task-feed-meta">
+                                <span class="badge badge-blue" id="task-status-badge" style="display: none;">⏳ Running</span>
                             </div>
                         </div>
-                        <div class="task-result-actions">
-                            <button class="btn btn-ghost btn-xs" onclick="copyTaskResult()" title="Copy result">📋
-                                Copy</button>
-                            <button class="btn btn-ghost btn-xs" onclick="closeTaskResult()" title="Dismiss">✕</button>
+                        <div class="task-steps" id="task-steps">
+                            <div class="task-empty-state">
+                                <div class="task-empty-icon">⚡</div>
+                                <div class="task-empty-title">Ready for Tasks</div>
+                                <div class="task-empty-desc">Select an agent, describe the task, then hit Run.<br>Agent progress will appear here.</div>
+                            </div>
                         </div>
                     </div>
-                    <div class="task-result-body md-content" id="task-result-body"></div>
                 </div>
 
+                <div class="card" id="task-result-panel" style="display: none; margin-top: 1.5rem;">
+                    <div class="task-result-header card-header">
+                        <div style="display: flex; align-items: center; gap: 0.6rem;">
+                            <span class="task-result-icon">✅</span>
+                            <h3 class="task-result-label">Task Complete</h3>
+                            <span id="task-result-agent-name" style="color: var(--text-secondary);"></span>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button class="btn btn-ghost btn-xs" onclick="copyTaskResult()" title="Copy task result">Copy</button>
+                            <button class="btn btn-ghost btn-xs" onclick="closeTaskResult()" title="Close task result">Close</button>
+                        </div>
+                    </div>
+                    <div class="task-result-body" id="task-result-body"></div>
+                </div>
             </section>
+
+            <!-- ── AGENT NETWORK ── -->
+            <section class="page" id="page-network">
+                <div class="network-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Remote agents</h3>
+                        </div>
+                        <div class="network-local-card">
+                            <span class="network-label">Local Agent Card</span>
+                            <a id="network-local-card-url" target="_blank" rel="noopener noreferrer"></a>
+                        </div>
+                        <div class="form-group">
+                            <label for="network-card-url">Discover by Agent Card URL</label>
+                            <input id="network-card-url" type="url" placeholder="https://agent.example/.well-known/agent-card.json" />
+                        </div>
+                        <div class="network-add-actions">
+                            <button class="btn btn-primary" onclick="addA2APeer()">＋ Add agent</button>
+                        </div>
+                        <div id="network-peers" class="network-peers">
+                            <div class="empty-state-small">No remote agents connected.</div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Delegate a task</h3>
+                        </div>
+                        <div class="form-group">
+                            <label for="network-peer-select">Remote agent</label>
+                            <select id="network-peer-select" style="width: 100%;"></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="network-task-message">Task</label>
+                            <textarea id="network-task-message" rows="5" placeholder="Describe the task for the remote agent..." style="width: 100%; resize: vertical;"></textarea>
+                        </div>
+                        <div class="network-send-actions">
+                            <button id="network-send-button" class="btn btn-primary task-run-btn" onclick="sendA2ATask()">➤ Send task</button>
+                        </div>
+                        <div class="network-poll-row">
+                            <input id="network-task-id" type="text" placeholder="Remote task ID" />
+                            <button class="btn btn-ghost" onclick="pollA2ATask()" title="Refresh remote task status">↻</button>
+                        </div>
+                        <div class="network-response-header">
+                            <strong>Responses</strong>
+                            <button class="btn btn-ghost btn-xs" onclick="clearA2ATaskResponses()" title="Clear response log">Clear log</button>
+                        </div>
+                        <pre id="network-task-result" class="network-task-result" aria-live="polite">No responses yet. Send a task or refresh a remote task ID.</pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── AGENT OS ── -->
+            <section class="page" id="page-agentos">
+                <!-- Metrics Panel -->
+                <div class="stats-grid" style="margin-bottom: 1.5rem;">
+                    <div class="stat-card">
+                        <div class="stat-icon">🪐</div>
+                        <div class="stat-value" id="stat-active-pods">0</div>
+                        <div class="stat-label">Active Pods</div>
+                        <div class="stat-trend" id="stat-pods-trend">Active runtimes</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🩹</div>
+                        <div class="stat-value" id="stat-heals">0</div>
+                        <div class="stat-label">SRE Self-Heals</div>
+                        <div class="stat-trend" id="stat-heals-trend">Dynamic recovery</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🪙</div>
+                        <div class="stat-value" id="stat-tokens">0</div>
+                        <div class="stat-label">Tokens Used</div>
+                        <div class="stat-trend" id="stat-tokens-trend">Cumulative</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">💵</div>
+                        <div class="stat-value" id="stat-cost">$0.00</div>
+                        <div class="stat-label">Total Cost</div>
+                        <div class="stat-trend">Estimated USD</div>
+                    </div>
+                </div>
+
+                <div class="two-col os-layout">
+                    <!-- Pod Runtimes Controller -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>🪐 Pod Runtime Inventory</h3>
+                            <div class="agent-os-toolbar">
+                                <select id="pod-status-filter" class="agent-os-filter" aria-label="Filter pods by status" onchange="refreshPods()">
+                                    <option value="">All statuses</option>
+                                    <option value="running">Running</option>
+                                    <option value="healing">Healing</option>
+                                    <option value="suspended">Suspended</option>
+                                    <option value="completed">Completed</option>
+                                    <option value="failed">Failed</option>
+                                    <option value="stopped">Stopped</option>
+                                </select>
+                                <button class="btn btn-ghost btn-xs" onclick="refreshPods()" title="Refresh runtime inventory">🔄</button>
+                                <button class="btn btn-primary btn-xs" onclick="navigate('tasks')" title="Start a new task">New task</button>
+                            </div>
+                        </div>
+                        <div class="pods-grid" id="pods-grid">
+                            <div class="empty-state-small">Loading runtime inventory...</div>
+                        </div>
+                        <div class="agent-os-updated" id="agent-os-updated-at">Waiting for runtime data</div>
+                    </div>
+
+                    <!-- Live Trace & Interventions Panel -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>👁️ Observability Traces</h3>
+                            <button class="btn btn-ghost btn-xs" onclick="loadTracesList()">🔄 Refresh</button>
+                        </div>
+                        <div class="trace-list-panel" id="trace-list-panel" style="max-height: 250px; overflow-y: auto; margin-top: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem;">
+                            <!-- Traces get injected here -->
+                            <div class="empty-state-small">No traces yet. Launch a pod above to log steps.</div>
+                        </div>
+
+                        <div class="card-header" style="margin-top: 1.5rem;">
+                            <h3>🌲 Trace Span Hierarchy & SRE Logs</h3>
+                            <div id="active-trace-title" style="font-size: 0.85rem; color: var(--text-secondary); font-weight: 500;">Select a trace above to visualize tree</div>
+                        </div>
+                        <div class="trace-tree-container" id="trace-tree-container" style="max-height: 400px; overflow-y: auto; margin-top: 1rem; padding: 1rem; background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid var(--border);">
+                            <div class="empty-state-small">Select a trace to view spans.</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Marketplace removed: integrations are disabled in this deployment -->
 
             <!-- ── HISTORY ── -->
             <section class="page" id="page-history">
@@ -558,21 +735,43 @@
                 </div>
             </section>
 
-            <!-- ── SKILLS ── -->
-            <section class="page" id="page-skills">
+            <!-- ── FILES ── -->
+            <section class="page" id="page-files">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>📁 Files & Data</h3>
+                        <div class="header-actions">
+                            <input type="text" id="files-search" placeholder="🔍 Search files..." oninput="filterFiles(this.value)" />
+                            <button class="btn btn-secondary" onclick="refreshFiles()" title="Refresh file list">🔄 Refresh</button>
+                        </div>
+                    </div>
+                    <div id="files-grid" class="files-grid">
+                        <div class="empty-state-small">Loading files...</div>
+                    </div>
+                </div>
+            </section>
 
-                <!-- Create Custom Skill panel -->
+            <!-- ── TOOLS & AGENT SKILLS ── -->
+            <section class="page" id="page-tools">
+                <div class="capability-tabs" role="tablist" aria-label="Capabilities">
+                    <button class="capability-tab active" role="tab" aria-selected="true" onclick="switchCapabilityView('tools', this)">Tools</button>
+                    <button class="capability-tab" id="agent-skill-tab" role="tab" aria-selected="false" onclick="switchCapabilityView('agent-skills', this)">Agent Skills</button>
+                </div>
+
+                <div id="tools-panel">
+
+                <!-- Create Custom Tool panel -->
                 <div class="card skill-create-card">
                     <div class="skill-create-header" onclick="toggleSkillForm()">
                         <div class="skill-create-title">
                             <span class="skill-create-icon">🔧</span>
                             <div>
-                                <div style="font-weight:700;font-size:1rem">Create Custom Skill</div>
+                                <div style="font-weight:700;font-size:1rem">Create Custom Tool</div>
                                 <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.15rem">Add a new
-                                    tool that any agent can use</div>
+                                    callable action that agents can use</div>
                             </div>
                         </div>
-                        <button class="btn btn-primary btn-xs" id="skill-form-toggle-btn">+ Add Skill</button>
+                        <button class="btn btn-primary btn-xs" id="skill-form-toggle-btn">+ Add Tool</button>
                     </div>
 
                     <div class="skill-create-form" id="skill-create-form" style="display:none">
@@ -580,12 +779,12 @@
                         <div class="skill-ai-section" style="background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.15); border-radius: 12px; padding: 1.5rem; margin-bottom: 0.5rem;">
                             <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
                                 <span style="font-size: 1.2rem;">✨</span>
-                                <strong style="color: var(--text-primary); font-size: 1.05rem;">Generate with AI</strong>
+                                <strong style="color: var(--text-primary); font-size: 1.05rem;">Generate tool code with AI</strong>
                             </div>
                             <div style="display: flex; gap: 0.75rem; flex-direction: column;">
-                                <textarea id="skill-ai-prompt" style="flex: 1; min-height: 60px; background: rgba(0,0,0,0.2); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; color: var(--text-primary); padding: 0.75rem 1rem; font-family: var(--font); font-size: 0.9rem; resize: vertical; outline: none; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);" placeholder="Describe what the skill should do (e.g. 'Fetch the top 5 news articles from HackerNews')..." rows="2" onfocus="this.style.borderColor='rgba(139, 92, 246, 0.8)'" onblur="this.style.borderColor='rgba(139, 92, 246, 0.3)'"></textarea>
+                                <textarea id="skill-ai-prompt" style="flex: 1; min-height: 60px; background: rgba(0,0,0,0.2); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; color: var(--text-primary); padding: 0.75rem 1rem; font-family: var(--font); font-size: 0.9rem; resize: vertical; outline: none; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);" placeholder="Describe the action this tool should perform..." rows="2" onfocus="this.style.borderColor='rgba(139, 92, 246, 0.8)'" onblur="this.style.borderColor='rgba(139, 92, 246, 0.3)'"></textarea>
                                 <button class="btn btn-primary" id="generate-skill-btn" onclick="generateSkillFromAI()" style="align-self: flex-end; padding: 0.6rem 1.2rem; font-size: 0.9rem;">
-                                    <span>✨ Generate Code</span>
+                                    <span>✨ Generate Tool</span>
                                 </button>
                             </div>
                             <div id="skill-ai-status" style="font-size: 0.85rem; margin-top: 1rem; color: var(--text-secondary); display: none;">Generating code... ⏳</div>
@@ -599,7 +798,7 @@
 
                         <div class="form-grid">
                             <div class="form-group">
-                                <label>Skill Name <span style="color:var(--red)">*</span></label>
+                                <label>Tool Name <span style="color:var(--red)">*</span></label>
                                 <input type="text" id="skill-name" placeholder="e.g. lookup_employee (no spaces)" />
                             </div>
                             <div class="form-group">
@@ -617,7 +816,7 @@
                             <div class="form-group full-width">
                                 <label>Description <span style="color:var(--red)">*</span></label>
                                 <input type="text" id="skill-description"
-                                    placeholder="What does this skill do? Be clear — the agent reads this to decide when to use it." />
+                                    placeholder="What action does this tool perform? The agent uses this to decide when to call it." />
                             </div>
                             <div class="form-group full-width">
                                 <label>Parameters (JSON Schema)</label>
@@ -637,72 +836,260 @@
                                 </div>
                                 <textarea id="skill-handler-code" rows="8" class="code-textarea"
                                     placeholder="def handler(input: str) -> str:\n    # Your logic here\n    return f'Processed: {input}'">def handler(input: str) -> str:
-    # Write your custom skill logic here
+    # Write your custom tool logic here
     result = f"Processed: {input}"
     return result</textarea>
                             </div>
                         </div>
                         <div class="skill-form-actions">
                             <button class="btn btn-ghost" onclick="toggleSkillForm()">Cancel</button>
-                            <button class="btn btn-primary" onclick="createCustomSkill()">🔧 Register Skill</button>
+                            <button class="btn btn-primary" onclick="createCustomSkill()">🔧 Register Tool</button>
                         </div>
                     </div>
                 </div>
 
-                <!-- Existing skills grid -->
-                <div class="skills-section-label">Available Skills (<span id="skills-count">0</span>)</div>
+                <!-- Existing tools grid -->
+                <div class="skills-section-label">Available Tools (<span id="skills-count">0</span>)</div>
                 <div class="skills-grid-full" id="skills-grid-full"></div>
+                </div>
+
+                <div id="agent-skills-panel" style="display:none">
+                    <div class="card agent-skill-editor">
+                        <div class="skill-create-title">
+                            <span class="skill-create-icon">📝</span>
+                            <div>
+                                <div style="font-weight:700;font-size:1rem">Create an Agent Skill</div>
+                                <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.15rem">Write a Markdown workflow that tells agents how to do a task.</div>
+                            </div>
+                        </div>
+                        <div class="form-grid" style="margin-top:1.25rem">
+                            <div class="form-group">
+                                <label>Skill Name</label>
+                                <input type="text" id="agent-skill-name" placeholder="weekly-report" />
+                            </div>
+                            <div class="form-group">
+                                <label>Description</label>
+                                <input type="text" id="agent-skill-description" placeholder="Research and write a weekly report" />
+                            </div>
+                            <div class="form-group full-width">
+                                <label>Instructions (Markdown)</label>
+                                <textarea id="agent-skill-content" rows="14" class="code-textarea" placeholder="# Workflow&#10;1. Gather the required information.&#10;2. Verify important facts.&#10;3. Produce the requested result.&#10;&#10;## Quality checklist&#10;- Confirm every requested item is covered."></textarea>
+                            </div>
+                        </div>
+                        <div class="skill-form-actions">
+                            <button class="btn btn-secondary" onclick="generateAgentSkillFromAI()" id="generate-agent-skill-btn">✨ Draft with AI</button>
+                            <button class="btn btn-primary" onclick="saveAgentSkill()" id="save-agent-skill-btn">Save Skill</button>
+                            <button class="btn btn-ghost" onclick="clearAgentSkillEditor()">Clear</button>
+                        </div>
+                        <div id="agent-skill-status" class="agent-skill-status" aria-live="polite"></div>
+                    </div>
+                    <div class="skills-section-label">Markdown Skills (<span id="agent-skills-count">0</span>)</div>
+                    <div class="skills-grid-full" id="agent-skills-grid"></div>
+                </div>
 
             </section>
 
-            <!-- ── SETTINGS ── -->
-            <section class="page" id="page-settings">
-                <div class="two-col">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3>🤖 LLM Provider</h3>
+            <!-- ── MCP SERVER ── -->
+            <section class="page" id="page-mcp">
+                <div class="page-header">
+                    <div>
+                        <div class="page-title">🔗 MCP Server</div>
+                        <div class="page-description">Model Context Protocol for LLM Integration</div>
+                    </div>
+                </div>
+
+                <div class="mcp-layout">
+                    <!-- Top Row: Status + Config -->
+                    <div class="two-col">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>📊 Server Status</h3>
+                            </div>
+                            <div id="mcp-status">
+                                <div class="mcp-loading">Loading...</div>
+                            </div>
+                            <div class="mcp-server-actions">
+                                <button class="btn btn-primary" onclick="startMCPServer()" id="btn-start-mcp">▶️ Start Server</button>
+                                <button class="btn btn-danger" onclick="stopMCPServer()" id="btn-stop-mcp" style="display:none;">⏹️ Stop Server</button>
+                                <button class="btn btn-ghost" onclick="loadMCPPage()">🔄 Refresh</button>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>Provider</label>
-                            <select id="llm-provider" onchange="updateModelHint()">
-                                <option value="openai">OpenAI (GPT-4o)</option>
-                                <option value="gemini">Google Gemini</option>
-                                <option value="claude">✨ Anthropic Claude</option>
-                                <option value="ollama">Ollama (Local)</option>
-                            </select>
+
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>⚙️ Configuration</h3>
+                            </div>
+                            <div class="form-group">
+                                <label for="mcp-mode">Mode</label>
+                                <select id="mcp-mode">
+                                    <option value="http">HTTP JSON-RPC</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="mcp-endpoint">Endpoint</label>
+                                <input type="text" id="mcp-endpoint" value="/mcp" readonly />
+                            </div>
+                            <button class="btn btn-primary" onclick="saveMCPConfig()" style="width:100%;margin-top:0.5rem;">💾 Save Config</button>
                         </div>
-                        <div class="form-group">
-                            <label>API Key</label>
-                            <input type="password" id="llm-api-key" placeholder="sk-..." />
-                        </div>
-                        <div class="form-group">
-                            <label>Model</label>
-                            <input type="text" id="llm-model" placeholder="gpt-4o-mini" />
-                        </div>
-                        <button class="btn btn-primary" onclick="saveLLMConfig()">💾 Save & Connect</button>
-                        <div id="llm-config-status" style="margin-top:1rem"></div>
                     </div>
 
-                    <div class="card">
-                        <div class="card-header">
-                            <h3>📡 Provider Status</h3>
+                    <!-- Tools + Agents Row -->
+                    <div class="two-col">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>🔨 Available Tools Exposed Through MCP</h3>
+                            </div>
+                            <div id="mcp-tools-list" class="mcp-list">
+                                <div class="mcp-loading">Loading...</div>
+                            </div>
                         </div>
-                        <div id="provider-status-list"></div>
 
-                        <div class="card-header" style="margin-top:1.5rem">
-                            <h3>ℹ️ About ADgents</h3>
-                        </div>
-                        <div class="about-info">
-                            <p><strong>ADgents</strong> is an autonomous AI agent platform where each agent has a unique
-                                persona, persistent memory, domain expertise, and real-world skills.</p>
-                            <div class="about-badges">
-                                <span class="badge badge-purple">v1.0.0</span>
-                                <span class="badge badge-blue">Python 3.14</span>
-                                <span class="badge badge-green">FastAPI</span>
-                                <span class="badge badge-orange">Open Source</span>
+                        <div class="card">
+                            <div class="card-header">
+                                <h3>🤖 Available Agents</h3>
+                            </div>
+                            <div id="mcp-agents-list" class="mcp-list">
+                                <div class="mcp-loading">Loading...</div>
                             </div>
                         </div>
                     </div>
+
+                    <!-- Claude Desktop Integration -->
+                    <div class="card mcp-integration-card">
+                        <div class="card-header">
+                            <h3>📋 Claude Desktop Integration</h3>
+                        </div>
+                        <p class="mcp-integration-desc">Add this to your Claude config to access ADgents skills:</p>
+                        <div class="mcp-code-block">
+                            <code>{
+  "mcpServers": {
+    "adgents": {
+      "command": "python",
+      "args": ["-m", "adgents.mcp"]
+    }
+  }
+}</code>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── CREW MANAGER ── -->
+
+            <!-- ── SETTINGS ── -->
+            <section class="page" id="page-settings">
+                <div style="max-width: 800px; margin: 0 auto; padding: 1rem;">
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>API Access</h3>
+                        </div>
+                        <div class="form-group">
+                            <label for="api-token">Bearer token</label>
+                            <input type="password" id="api-token" class="form-input" autocomplete="off" />
+                        </div>
+                        <button class="btn btn-primary" onclick="saveApiToken()">Save token for this browser session</button>
+                    </div>
+                    
+                    <!-- LLM Configuration -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>🤖 LLM Configuration</h3>
+                        </div>
+                        
+                        <!-- Current Configuration Display -->
+                        <div style="background: linear-gradient(135deg, rgba(124, 58, 237, 0.1), rgba(37, 99, 235, 0.1)); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1.5rem;">
+                            <div style="font-weight: 600; margin-bottom: 0.75rem;">📊 Current Configuration</div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                <div>
+                                    <div style="color: var(--text-secondary); font-size: 0.85rem;">Provider</div>
+                                    <div id="current-provider-display" style="font-weight: 600; color: var(--accent);">🔴 OpenAI</div>
+                                </div>
+                                <div>
+                                    <div style="color: var(--text-secondary); font-size: 0.85rem;">Model</div>
+                                    <div id="current-model-display" style="font-weight: 600;">gpt-4o-mini</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Configured Providers Status -->
+                        <div style="background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1.5rem;">
+                            <div style="font-weight: 600; margin-bottom: 0.75rem;">✅ Configured Providers</div>
+                            <div id="llm-env-status" style="display: grid; gap: 0.5rem; font-size: 0.9rem;">
+                                <div style="color: var(--text-secondary);">Loading...</div>
+                            </div>
+                        </div>
+
+                        <!-- Provider & Model Selection -->
+                        <div class="form-group">
+                            <label>LLM Provider</label>
+                            <select id="llm-provider" onchange="updateProviderSelection()" class="form-input">
+                                <option value="">-- Select Provider --</option>
+                                <option value="openai">🔴 OpenAI</option>
+                                <option value="gemini">🔵 Google Gemini</option>
+                                <option value="claude">✨ Anthropic Claude</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label>API Key <span style="color: var(--text-secondary); font-size: 0.85rem;">(optional - leave blank to use .env)</span></label>
+                            <input type="password" id="llm-api-key" placeholder="Leave blank to use existing .env key" class="form-input" />
+                            <small style="display:block; color:var(--text-secondary); margin-top:0.5rem;">🔒 Only provide if you want to update the API key. Otherwise, the .env file key will be used.</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Model</label>
+                            <input type="text" id="llm-model" placeholder="e.g., gpt-4o, gpt-4o-mini, gemini-2.5-flash, claude-3-5-sonnet-20241022" class="form-input" />
+                            <small id="model-hint" style="display:block; color:var(--text-secondary); margin-top:0.5rem;">Enter any model name - not limited to predefined models</small>
+                        </div>
+
+                        <div style="display:flex; gap:0.75rem; flex-wrap: wrap;">
+                            <button class="btn btn-primary" onclick="saveLLMConfig()">💾 Save Configuration</button>
+                            <button class="btn btn-ghost" onclick="testLLMConnection()">🧪 Test Connection</button>
+                            <button class="btn btn-ghost" onclick="loadCurrentLLMConfig()">🔄 Reload</button>
+                        </div>
+                        <div id="llm-config-status" style="margin-top:1rem; display:none;"></div>
+                    </div>
+
+                    <!-- Personal Settings -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>⚙️ Preferences</h3>
+                        </div>
+                        <div class="form-group">
+                            <label>Organization Name</label>
+                            <input type="text" id="org-name" placeholder="Your organization" class="form-input" />
+                        </div>
+                        <div class="form-group">
+                            <label>Memory Type</label>
+                            <select id="memory-type" class="form-input">
+                                <option value="multi_tier">Multi-Tier (Recommended)</option>
+                                <option value="episodic">Episodic Only</option>
+                                <option value="semantic">Semantic Only</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="auto-save" checked /> Auto-save conversations
+                            </label>
+                        </div>
+                        <button class="btn btn-primary" onclick="savePersonalSettings()">💾 Save</button>
+                        <div id="personal-config-status" style="margin-top:1rem"></div>
+                    </div>
+
+                    <!-- System Info -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>ℹ️ System</h3>
+                        </div>
+                        <div style="display: grid; gap: 0.5rem; font-size: 0.9rem;">
+                            <div><strong>Platform:</strong> ADgents v1.0.0</div>
+                            <div><strong>Framework:</strong> FastAPI + Python 3.10+</div>
+                            <div><strong>License:</strong> Open Source (MIT)</div>
+                            <div><a href="https://github.com/CYBERBULL123/ADgents" target="_blank" style="color: var(--accent);">📚 GitHub Repository</a></div>
+                        </div>
+                    </div>
+
                 </div>
             </section>
 
@@ -723,6 +1110,16 @@
                             <div class="empty-state-small" style="text-align:left; padding:0">Loading documentation...</div>
                         </div>
                     </div>
+                </div>
+            </section>
+
+
+            <section class="page" id="page-crews">
+                <div class="card" style="padding:2rem; text-align:center;">
+                    <h2>👥 Crew features removed</h2>
+                    <p style="color:var(--text-secondary);">Multi-agent crew collaboration has been removed from this deployment.</p>
+                </div>
+            </section>
                 </div>
             </section>
 
@@ -751,7 +1148,7 @@
     <div class="modal-overlay" id="skill-modal" onclick="closeSkillModal(event)" style="display:none">
         <div class="modal">
             <div class="modal-header">
-                <div class="modal-title" id="modal-skill-name">Skill Name</div>
+                <div class="modal-title" id="modal-skill-name">Tool Name</div>
                 <button class="modal-close"
                     onclick="document.getElementById('skill-modal').style.display='none'">✕</button>
             </div>
@@ -759,7 +1156,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=9"></script>
+    <script src="/studio/app.js?v=13"></script>
 </body>
 
 </html>

@@ -1,0 +1,1 @@
+"""Static assets served by ADgents Studio."""

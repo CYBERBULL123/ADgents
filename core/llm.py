@@ -43,9 +43,9 @@ class OpenAIProvider(BaseLLMProvider):
     
     name = "openai"
     
-    def __init__(self, api_key: str = None, model: str = "gpt-4o-mini"):
+    def __init__(self, api_key: str = None, model: str = None):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
-        self.model = model
+        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         self.base_url = "https://api.openai.com/v1"
     
     def is_available(self) -> bool:
@@ -104,9 +104,9 @@ class GeminiProvider(BaseLLMProvider):
     
     name = "gemini"
     
-    def __init__(self, api_key: str = None, model: str = "gemini-1.5-flash"):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
-        self.model = model
+    def __init__(self, api_key: str = None, model: str = None):
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
+        self.model = model or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
     
     def is_available(self) -> bool:
@@ -220,9 +220,9 @@ class AnthropicProvider(BaseLLMProvider):
     
     name = "claude"
     
-    def __init__(self, api_key: str = None, model: str = "claude-3-5-sonnet-20241022"):
+    def __init__(self, api_key: str = None, model: str = None):
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
-        self.model = model
+        self.model = model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
         self.base_url = "https://api.anthropic.com/v1"
     
     def is_available(self) -> bool:
@@ -334,8 +334,9 @@ class OllamaProvider(BaseLLMProvider):
         self.base_url = base_url
     
     def is_available(self) -> bool:
+        """Check if Ollama is available (with very short timeout)."""
         try:
-            with httpx.Client(timeout=5) as client:
+            with httpx.Client(timeout=1.0) as client:  # Reduced from 5 to 1 second
                 response = client.get(f"{self.base_url}/api/tags")
                 return response.status_code == 200
         except Exception:
@@ -407,23 +408,46 @@ class LLMRouter:
         self._auto_register()
     
     def _auto_register(self):
-        # Try each provider
+        # Try each provider (quick checks only - skip Ollama during startup to avoid blocking)
         providers = [
             OpenAIProvider(),
             GeminiProvider(),
             AnthropicProvider(),
-            OllamaProvider(),
+            # OllamaProvider(),  # Commented out to prevent blocking startup
             MockProvider()  # Always available as fallback
         ]
         
         for provider in providers:
-            self.register(provider)
-            if provider.is_available() and self._default_provider is None:
-                if provider.name != "mock":  # Prefer real providers
-                    self._default_provider = provider.name
+            try:
+                self.register(provider)
+                # Only check availability for quick providers
+                if provider.is_available() and self._default_provider is None:
+                    if provider.name != "mock":  # Prefer real providers
+                        self._default_provider = provider.name
+            except Exception as e:
+                print(f"Warning: Failed to register {provider().name if hasattr(provider, 'name') else 'provider'}: {e}")
+        
+        # Check for explicit DEFAULT_LLM_PROVIDER environment variable
+        env_provider = os.getenv("DEFAULT_LLM_PROVIDER")
+        if env_provider and env_provider in self._providers:
+            self._default_provider = env_provider
         
         if not self._default_provider:
             self._default_provider = "mock"
+        
+        # Register Ollama separately if explicitly configured
+        try:
+            ollama = OllamaProvider()
+            if ollama.is_available():
+                self.register(ollama)
+        except Exception:
+            pass  # Ollama not available, skip
+
+    def reload_from_environment(self):
+        """Refresh providers without invalidating references held by agents."""
+        refreshed = type(self)()
+        self._providers = refreshed._providers
+        self._default_provider = refreshed._default_provider
     
     def register(self, provider: BaseLLMProvider):
         self._providers[provider.name] = provider
