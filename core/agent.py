@@ -6,6 +6,7 @@ It runs a ReAct (Reason + Act) loop to solve tasks autonomously.
 import json
 import uuid
 import time
+import threading
 from typing import List, Dict, Any, Optional, Callable, Generator
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -98,6 +99,7 @@ class Agent:
         self.status = AgentStatus.IDLE
         self.current_task: Optional[AgentTask] = None
         self._on_thought: Optional[Callable] = None  # callback for streaming thoughts
+        self._execution_lock = threading.RLock()
         
         # Initialize working memory with persona system prompt
         self._init_system_prompt()
@@ -130,7 +132,8 @@ class Agent:
     
     def on_thought(self, callback: Callable):
         """Register callback for streaming thought steps."""
-        self._on_thought = callback
+        with self._execution_lock:
+            self._on_thought = callback
         return self
     
     def _emit_thought(self, step: ThoughtStep):
@@ -143,6 +146,10 @@ class Agent:
         Simple single-turn response without autonomous tool use.
         Good for conversation.
         """
+        with self._execution_lock:
+            return self._think(user_input)
+
+    def _think(self, user_input: str) -> str:
         self.status = AgentStatus.THINKING
         
         # Add memory context if relevant
@@ -164,7 +171,23 @@ class Agent:
         self.status = AgentStatus.IDLE
         return response.content
     
-    def run(self, task: str, max_iterations: int = None, pod_id: str = None) -> AgentTask:
+    def run(
+        self,
+        task: str,
+        max_iterations: int = None,
+        pod_id: str = None,
+        on_thought: Callable = None,
+    ) -> AgentTask:
+        with self._execution_lock:
+            previous_callback = self._on_thought
+            if on_thought is not None:
+                self._on_thought = on_thought
+            try:
+                return self._run(task, max_iterations, pod_id)
+            finally:
+                self._on_thought = previous_callback
+
+    def _run(self, task: str, max_iterations: int = None, pod_id: str = None) -> AgentTask:
         """
         Run an autonomous task using the ReAct loop with trace logging and self-healing.
         """
@@ -349,8 +372,7 @@ class Agent:
                 heal_result = SRE_SUPERVISOR.diagnose_and_heal(self.pod_id, llm_span_id, error_msg, self)
                 
                 if heal_result["applied"] and heal_result["patch_type"] == "memory_append":
-                    # SRE injected diagnosis instruction, try to loop again
-                    iteration -= 1  # retry this iteration
+                    # The correction consumes this iteration so repeated failures stay bounded.
                     continue
                 
                 # If SRE couldn't heal, fail task
@@ -596,16 +618,17 @@ class Agent:
     
     def update_persona(self, **kwargs):
         """Dynamically update the agent's persona."""
-        self.persona.update(**kwargs)
-        # Reinitialize system prompt
-        self.memory.working.clear()
-        self._init_system_prompt()
+        with self._execution_lock:
+            self.persona.update(**kwargs)
+            self.memory.working.clear()
+            self._init_system_prompt()
     
     def reset_session(self):
         """Clear working memory for a fresh conversation."""
-        self.memory.working.clear()
-        self._init_system_prompt()
-        self.status = AgentStatus.IDLE
+        with self._execution_lock:
+            self.memory.working.clear()
+            self._init_system_prompt()
+            self.status = AgentStatus.IDLE
     
     @property
     def name(self) -> str:

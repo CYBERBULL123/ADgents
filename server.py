@@ -7,14 +7,20 @@ import asyncio
 import uuid
 import logging
 import os
+import ipaddress
+import socket
+import re
+import hmac
+from urllib.parse import urljoin, urlsplit
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
+import httpx
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel
 
 import sys
@@ -46,6 +52,7 @@ def _load_env_file():
 _load_env_file()
 
 from core.agent import Agent, AgentFactory, AgentTask, ThoughtStep, AGENT_FACTORY
+from core.config import get_api_host, get_api_token, get_cors_origins, is_loopback_host
 from core.persona import Persona, PERSONA_TEMPLATES
 from core.skills import SKILL_REGISTRY, Skill
 from core.agent_skills import AGENT_SKILL_STORE
@@ -55,6 +62,7 @@ from core.memory import AgentMemory
 from core.agent_store import save_agent_persona, load_all_personas, delete_agent_persona
 from core.task_db import save_task, list_tasks, get_task, delete_task, task_stats
 from core.a2a_protocol import A2AProtocolManager, get_a2a_manager, A2AMessage
+from core.a2a_registry import save_remote_agent, list_remote_agents, get_remote_agent, delete_remote_agent
 from core.mcp_server import MCPServer
 
 
@@ -122,6 +130,12 @@ class MCPConfigRequest(BaseModel):
     mode: Optional[str] = "stdio"
     port: Optional[int] = 8001
 
+class A2APeerDiscoveryRequest(BaseModel):
+    card_url: str
+
+class A2APeerMessageRequest(BaseModel):
+    message: str
+
 class CreateTemplateRequest(BaseModel):
     name: str
     description: str
@@ -166,11 +180,32 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=get_cors_origins(),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def require_api_token(request: Request, call_next):
+    path = request.url.path
+    protected = (
+        path == "/api" or path.startswith("/api/")
+        or path == "/mcp" or path.startswith("/mcp/")
+        or path == "/a2a/v1"
+    )
+    if protected:
+        token = get_api_token()
+        if path == "/a2a/v1":
+            token = os.getenv("A2A_API_KEY", "").strip() or token
+        if not token and not is_loopback_host(get_api_host()):
+            return JSONResponse({"detail": "ADGENTS_API_TOKEN is required for non-loopback binds"}, status_code=503)
+        if token:
+            scheme, _, supplied = request.headers.get("authorization", "").partition(" ")
+            if scheme.lower() != "bearer" or not hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8")):
+                return JSONResponse({"detail": "Invalid or missing bearer token"}, status_code=401)
+    return await call_next(request)
 
 # Serve static files (Web Studio)
 studio_path = Path(__file__).parent / "studio"
@@ -188,8 +223,8 @@ class ConnectionManager:
     def __init__(self):
         self.connections: Dict[str, List[WebSocket]] = {}
     
-    async def connect(self, ws: WebSocket, agent_id: str):
-        await ws.accept()
+    async def connect(self, ws: WebSocket, agent_id: str, subprotocol: str = None):
+        await ws.accept(subprotocol=subprotocol)
         if agent_id not in self.connections:
             self.connections[agent_id] = []
         self.connections[agent_id].append(ws)
@@ -240,14 +275,6 @@ async def _agent_auto_reply(
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
-
-@app.get("/")
-async def root():
-    studio_index = studio_path / "index.html"
-    if studio_index.exists():
-        return FileResponse(str(studio_index))
-    return {"name": "ADgents API", "version": "1.0.0", "studio": "/studio"}
-
 
 @app.get("/api/health")
 async def health():
@@ -370,7 +397,7 @@ async def chat(req: ChatRequest):
             "steps": [step.to_dict() for step in task.steps],
         }
 
-    response = agent.think(req.message)
+    response = await asyncio.to_thread(agent.think, req.message)
     return {
         "response": response,
         "agent": agent.name,
@@ -393,9 +420,6 @@ async def run_task(req: TaskRequest, background_tasks: BackgroundTasks):
         import time
         step_queue: asyncio.Queue = asyncio.Queue()
         
-        # Track last thought time to throttle streaming
-        last_thought_time = [time.time()]
-        
         def on_thought(step: ThoughtStep):
             # Thread-safe: put step into async queue with minimal throttling
             # This allows thoughts to stream more smoothly
@@ -406,13 +430,14 @@ async def run_task(req: TaskRequest, background_tasks: BackgroundTasks):
             except Exception as e:
                 logger.warning(f"Failed to queue thought: {e}")
         
-        agent.on_thought(on_thought)
-        
         # Run CPU-bound agent execution in a thread pool
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         
         # Use standard ReAct loop
-        agent_future = loop.run_in_executor(executor, agent.run, req.task, req.max_iterations, task_id)
+        agent_future = loop.run_in_executor(
+            executor,
+            lambda: agent.run(req.task, req.max_iterations, task_id, on_thought=on_thought),
+        )
         
         # Drain the step queue while the agent is running, streaming steps via WebSocket
         # Use shorter timeout to catch more frequent updates
@@ -490,6 +515,20 @@ async def run_task(req: TaskRequest, background_tasks: BackgroundTasks):
         finally:
             executor.shutdown(wait=False)
     
+    save_task(
+        task_id=task_id,
+        agent_id=req.agent_id,
+        agent_name=agent.name,
+        agent_avatar=agent.persona.avatar,
+        task_text=req.task,
+        status="running",
+        result=None,
+        error=None,
+        steps=[],
+        started_at=datetime.utcnow().isoformat(),
+        completed_at=None,
+        max_iterations=req.max_iterations,
+    )
     background_tasks.add_task(run_and_broadcast)
     
     return {
@@ -724,6 +763,8 @@ async def execute_skill(req: SkillExecuteRequest):
 @app.post("/api/tools/register")
 async def register_skill(req: RegisterSkillRequest):
     """Register a new custom skill from Python handler code."""
+    if os.getenv("ADGENTS_ENABLE_CUSTOM_SKILLS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        raise HTTPException(403, "Python custom skills are disabled by the current security policy")
     if SKILL_REGISTRY.get(req.name) and not SKILL_REGISTRY.get(req.name).is_custom:
         raise HTTPException(400, f"Cannot override built-in skill '{req.name}'")
     try:
@@ -1006,10 +1047,8 @@ async def configure_llm(config: Dict[str, Any]):
         with open(env_path, "w") as f:
             f.writelines(updated_lines)
     
-    # Reinitialize the LLM router with new config
-    from core.llm import LLMRouter
-    global LLM_ROUTER
-    LLM_ROUTER = LLMRouter()
+    # Refresh the shared router in place so existing agents see the new settings.
+    LLM_ROUTER.reload_from_environment()
     
     return {
         "success": True,
@@ -1263,8 +1302,8 @@ async def list_docs():
 # ─── MCP (Model Context Protocol) ─────────────────────────────────────────────
 
 # Global MCP server state
-_mcp_server_running = False
-_mcp_config = {"mode": "stdio", "port": 8001}
+_mcp_server_running = True
+_mcp_config = {"mode": "http", "endpoint": "/mcp"}
 
 @app.get("/api/mcp/status")
 async def mcp_status():
@@ -1296,7 +1335,7 @@ async def mcp_status():
             "running": _mcp_server_running,
             "server_name": "adgents",
             "version": "1.0.0",
-            "supported_protocols": ["stdio", "sse"],
+            "supported_protocols": ["HTTP JSON-RPC", "stdio (standalone)"],
             "available_tools": tools_count,
             "tool_names": tool_names,
             "available_agents": agents_count,
@@ -1305,7 +1344,7 @@ async def mcp_status():
             "capability": {
                 "has_tools": tools_count > 0,
                 "has_agents": agents_count > 0,
-                "ready_for_connection": True
+                "ready_for_connection": _mcp_server_running
             }
         }
     except Exception as e:
@@ -1326,12 +1365,11 @@ async def mcp_list_tools():
 
 @app.post("/api/mcp/configure")
 async def mcp_configure(request: MCPConfigRequest):
-    """Configure MCP server settings (e.g., stdio vs SSE mode)."""
+    """Report the mounted HTTP endpoint; transport and port are controlled by the host app."""
     global _mcp_config
-    _mcp_config = {
-        "mode": request.mode or "stdio",
-        "port": request.port or 8001,
-    }
+    if request.mode not in (None, "http"):
+        raise HTTPException(400, "The mounted MCP transport is HTTP JSON-RPC; stdio runs as a standalone process")
+    _mcp_config = {"mode": "http", "endpoint": "/mcp"}
     return {
         "success": True,
         "message": "MCP configured successfully",
@@ -1344,6 +1382,7 @@ async def mcp_start():
     global _mcp_server_running
     try:
         _mcp_server_running = True
+        mcp_server.enabled = True
         return {
             "success": True,
             "message": "MCP server started",
@@ -1362,6 +1401,7 @@ async def mcp_stop():
     global _mcp_server_running
     try:
         _mcp_server_running = False
+        mcp_server.enabled = False
         return {
             "success": True,
             "message": "MCP server stopped",
@@ -1377,7 +1417,24 @@ async def mcp_stop():
 @app.websocket("/ws/{agent_id}")
 async def websocket_endpoint(websocket: WebSocket, agent_id: str):
     """Real-time WebSocket connection for agent updates."""
-    await manager.connect(websocket, agent_id)
+    origin = websocket.headers.get("origin")
+    if origin and origin not in get_cors_origins():
+        await websocket.close(code=4403)
+        return
+
+    token = get_api_token()
+    if not token and not is_loopback_host(get_api_host()):
+        await websocket.close(code=4403)
+        return
+
+    offered_protocols = [value.strip() for value in websocket.headers.get("sec-websocket-protocol", "").split(",") if value.strip()]
+    if token:
+        supplied = next((value[len("adgents-auth."):] for value in offered_protocols if value.startswith("adgents-auth.")), "")
+        if not hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8")):
+            await websocket.close(code=4401)
+            return
+    subprotocol = "adgents" if "adgents" in offered_protocols else None
+    await manager.connect(websocket, agent_id, subprotocol=subprotocol)
     
     await websocket.send_json({
         "type": "connected",
@@ -1403,14 +1460,14 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str):
                             def on_thought(step: ThoughtStep):
                                 loop.call_soon_threadsafe(step_queue.put_nowait, step.to_dict())
 
-                            agent.on_thought(on_thought)
                             try:
                                 await websocket.send_json({
                                     "type": "chat_started",
                                     "task_id": task_id,
                                 })
                                 task_future = loop.run_in_executor(
-                                    None, agent.run, message, None, task_id
+                                    None,
+                                    lambda: agent.run(message, None, task_id, on_thought=on_thought),
                                 )
                                 while not task_future.done():
                                     try:
@@ -1445,12 +1502,9 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str):
                                     "task_id": task_id,
                                     "error": str(e),
                                 })
-                            finally:
-                                agent.on_thought(None)
-
                         asyncio.create_task(run_autonomous_chat())
                     else:
-                        response = agent.think(message)
+                        response = await asyncio.to_thread(agent.think, message)
                         await websocket.send_json({
                             "type": "chat_response",
                             "response": response,
@@ -1467,14 +1521,6 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str):
         await manager.disconnect(websocket, agent_id)
 
 
-# ─── Agent Templates ──────────────────────────────────────────────────────────
-
-@app.get("/api/templates")
-async def templates_disabled():
-    """Templates API disabled: related crew features removed."""
-    return {"success": False, "error": "Template & organization features have been removed in this deployment."}
-
-
 # ─── Organizations ────────────────────────────────────────────────────────────
 
 @app.get("/api/organizations")
@@ -1483,6 +1529,305 @@ async def organizations_disabled():
 
 
 # ─── Agent-to-Agent (A2A) Protocol ────────────────────────────────────────────
+
+def _a2a_task_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    status = str(record.get("status") or "failed").lower()
+    state = {
+        "completed": "TASK_STATE_COMPLETED",
+        "running": "TASK_STATE_WORKING",
+        "started": "TASK_STATE_SUBMITTED",
+    }.get(status, "TASK_STATE_FAILED")
+    timestamp = record.get("completed_at") or record.get("started_at")
+    if timestamp and not timestamp.endswith("Z"):
+        timestamp += "Z"
+    task: Dict[str, Any] = {
+        "id": record["id"],
+        "contextId": record["id"],
+        "status": {"state": state, "timestamp": timestamp},
+    }
+    output = record.get("result")
+    error = record.get("error")
+    if output:
+        task["artifacts"] = [{
+            "artifactId": f"{record['id']}-result",
+            "name": "Result",
+            "parts": [{"text": output}],
+        }]
+    elif error:
+        task["status"]["message"] = {
+            "messageId": f"{record['id']}-error",
+            "role": "ROLE_AGENT",
+            "parts": [{"text": error}],
+        }
+    return task
+
+
+def _a2a_error(request_id: Any, code: int, message: str) -> Dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+async def _execute_a2a_task(agent: Agent, text: str, task_id: str, started_at: str) -> None:
+    try:
+        task = await asyncio.to_thread(agent.run, text, 10, task_id)
+        task_data = task.to_dict()
+        save_task(
+            task_id=task_id,
+            agent_id=agent.id,
+            agent_name=agent.name,
+            agent_avatar=agent.persona.avatar,
+            task_text=text,
+            status=task_data.get("status", "completed"),
+            result=task_data.get("result"),
+            error=task_data.get("error"),
+            steps=task_data.get("steps", []),
+            started_at=task_data.get("started_at", started_at),
+            completed_at=task_data.get("completed_at") or datetime.utcnow().isoformat(),
+            max_iterations=10,
+        )
+    except Exception as exc:
+        logger.exception("A2A task failed for agent %s", agent.id)
+        save_task(
+            task_id=task_id, agent_id=agent.id, agent_name=agent.name,
+            agent_avatar=agent.persona.avatar, task_text=text, status="failed",
+            result=None, error=str(exc), steps=[], started_at=started_at,
+            completed_at=datetime.utcnow().isoformat(), max_iterations=10,
+        )
+
+
+def _validate_a2a_url(value: str) -> str:
+    parsed = urlsplit(value)
+    allow_private = os.getenv("A2A_ALLOW_PRIVATE_URLS", "").lower() in ("1", "true", "yes")
+    if parsed.scheme not in (("http", "https") if allow_private else ("https",)):
+        raise ValueError("Agent URLs must use HTTPS. HTTP is allowed only with A2A_ALLOW_PRIVATE_URLS=true.")
+    if not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("Agent URL must have a hostname and cannot contain credentials.")
+    try:
+        addresses = [ipaddress.ip_address(parsed.hostname)]
+    except ValueError:
+        try:
+            addresses = [ipaddress.ip_address(item[4][0]) for item in socket.getaddrinfo(parsed.hostname, None)]
+        except OSError as exc:
+            raise ValueError("Agent hostname could not be resolved.") from exc
+    if not allow_private and any(not address.is_global for address in addresses):
+        raise ValueError("Private, local, and reserved network destinations are blocked.")
+    return value
+
+
+def _normalize_card_url(value: str) -> str:
+    value = value.strip()
+    parsed = urlsplit(value)
+    if not parsed.path or parsed.path == "/":
+        value = urljoin(value.rstrip("/") + "/", ".well-known/agent-card.json")
+    return _validate_a2a_url(value)
+
+
+async def _fetch_a2a_card(card_url: str) -> Dict[str, Any]:
+    card_url = _normalize_card_url(card_url)
+    async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+        response = await client.get(card_url, headers={"Accept": "application/json"})
+    response.raise_for_status()
+    if len(response.content) > 1024 * 1024:
+        raise ValueError("Agent Card exceeds the 1 MB size limit.")
+    card = response.json()
+    if not isinstance(card, dict) or not card.get("name") or not card.get("description"):
+        raise ValueError("Response is not a valid Agent Card: name and description are required.")
+    interfaces = card.get("supportedInterfaces")
+    if not isinstance(interfaces, list) or not any(
+        item.get("protocolBinding") == "JSONRPC" and item.get("protocolVersion") == "1.0"
+        for item in interfaces if isinstance(item, dict)
+    ):
+        raise ValueError("This first release supports A2A JSON-RPC protocol version 1.0 peers only.")
+    return card
+
+
+def _peer_interface(peer: Dict[str, Any]) -> Dict[str, Any]:
+    for interface in peer["card"].get("supportedInterfaces", []):
+        if interface.get("protocolBinding") == "JSONRPC" and interface.get("protocolVersion") == "1.0":
+            return interface
+    raise HTTPException(400, "Remote peer does not expose A2A JSON-RPC 1.0.")
+
+
+@app.get("/.well-known/agent-card.json")
+async def a2a_agent_card(request: Request):
+    """Publish the A2A card for this ADgents host and its local persona tenants."""
+    public_url = os.getenv("A2A_PUBLIC_URL", str(request.base_url).rstrip("/"))
+    endpoint = public_url.rstrip("/") + "/a2a/v1"
+    personas = [agent.persona for agent in agents.values()]
+    skills = []
+    for persona in personas:
+        skill_id = re.sub(r"[^a-z0-9-]+", "-", persona.id.lower()).strip("-") or "agent"
+        tags = list(dict.fromkeys((persona.expertise_domains or []) + (persona.tags or []) + (persona.skills or [])))
+        skills.append({
+            "id": skill_id,
+            "name": persona.name,
+            "description": f"{persona.role}. " + (", ".join(persona.expertise_domains) or "General assistance."),
+            "tags": tags or [persona.role.lower()],
+            "inputModes": ["text/plain"],
+            "outputModes": ["text/plain"],
+        })
+    interfaces = [{
+        "url": endpoint,
+        "protocolBinding": "JSONRPC",
+        "protocolVersion": "1.0",
+        "tenant": persona.id,
+    } for persona in personas]
+    if not interfaces:
+        interfaces = [{"url": endpoint, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}]
+    card: Dict[str, Any] = {
+        "name": "ADgents",
+        "description": "A multi-agent host that routes A2A tasks to configured agent personas.",
+        "supportedInterfaces": interfaces,
+        "version": "1.0.0",
+        "capabilities": {"streaming": False, "pushNotifications": False},
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": skills,
+    }
+    if os.getenv("A2A_API_KEY"):
+        card["securitySchemes"] = {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}}
+        card["securityRequirements"] = [{"schemes": {"bearer": {"list": []}}}]
+    return JSONResponse(card, headers={"Cache-Control": "public, max-age=300"})
+
+
+@app.post("/a2a/v1")
+async def a2a_jsonrpc(request: Request, background_tasks: BackgroundTasks):
+    """Handle A2A 1.0 JSON-RPC SendMessage and GetTask calls."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(_a2a_error(None, -32700, "Invalid JSON payload"))
+    request_id = body.get("id") if isinstance(body, dict) else None
+    if not isinstance(body, dict) or body.get("jsonrpc") != "2.0" or "id" not in body:
+        return JSONResponse(_a2a_error(request_id, -32600, "Invalid JSON-RPC request"))
+    api_key = os.getenv("A2A_API_KEY")
+    if api_key and not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {api_key}"):
+        return JSONResponse(_a2a_error(request_id, -32000, "Authentication required"), status_code=401)
+    requested_version = request.headers.get("a2a-version")
+    if requested_version and requested_version != "1.0":
+        return JSONResponse(_a2a_error(request_id, -32009, "Only A2A protocol version 1.0 is supported"), status_code=400)
+    method = body.get("method")
+    params = body.get("params") or {}
+    if not isinstance(params, dict):
+        return JSONResponse(_a2a_error(request_id, -32602, "params must be an object"))
+
+    if method == "SendMessage":
+        message = params.get("message") or {}
+        parts = message.get("parts") if isinstance(message, dict) else None
+        text = "\n".join(part["text"] for part in (parts or []) if isinstance(part, dict) and isinstance(part.get("text"), str)).strip()
+        tenant = params.get("tenant")
+        agent = agents.get(str(tenant)) if tenant else (next(iter(agents.values())) if len(agents) == 1 else None)
+        if not text or not isinstance(parts, list):
+            return JSONResponse(_a2a_error(request_id, -32602, "message.parts must include at least one text part"))
+        if isinstance(message, dict) and message.get("role") not in ("ROLE_USER", "user"):
+            return JSONResponse(_a2a_error(request_id, -32602, "message.role must be ROLE_USER"))
+        if not agent:
+            return JSONResponse(_a2a_error(request_id, -32602, "Set tenant to a local agent ID from the Agent Card"))
+        task_id = f"a2a-{uuid.uuid4()}"
+        started_at = datetime.utcnow().isoformat()
+        configuration = params.get("configuration") or {}
+        if isinstance(configuration, dict) and configuration.get("returnImmediately"):
+            save_task(
+                task_id=task_id, agent_id=agent.id, agent_name=agent.name,
+                agent_avatar=agent.persona.avatar, task_text=text, status="running",
+                result=None, error=None, steps=[], started_at=started_at,
+                completed_at=None, max_iterations=10,
+            )
+            background_tasks.add_task(_execute_a2a_task, agent, text, task_id, started_at)
+        else:
+            await _execute_a2a_task(agent, text, task_id, started_at)
+        result = {"task": _a2a_task_from_record(get_task(task_id))}
+        return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    if method == "GetTask":
+        task_id = params.get("id")
+        record = get_task(str(task_id)) if isinstance(task_id, str) and task_id.startswith("a2a-") else None
+        if not record:
+            return JSONResponse(_a2a_error(request_id, -32001, "Task not found"))
+        return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": _a2a_task_from_record(record)})
+
+    return JSONResponse(_a2a_error(request_id, -32601, "Method not found"))
+
+
+@app.get("/api/a2a/peers")
+async def api_list_a2a_peers():
+    return {"peers": list_remote_agents()}
+
+
+@app.post("/api/a2a/peers")
+async def api_add_a2a_peer(req: A2APeerDiscoveryRequest):
+    try:
+        card_url = _normalize_card_url(req.card_url)
+        card = await _fetch_a2a_card(card_url)
+        return {"peer": save_remote_agent(card_url, card)}
+    except (ValueError, httpx.HTTPError, json.JSONDecodeError) as exc:
+        raise HTTPException(400, f"Could not discover A2A peer: {exc}") from exc
+
+
+@app.delete("/api/a2a/peers/{peer_id}")
+async def api_delete_a2a_peer(peer_id: str):
+    if not delete_remote_agent(peer_id):
+        raise HTTPException(404, "A2A peer not found")
+    return {"success": True}
+
+
+async def _call_remote_a2a(peer: Dict[str, Any], method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    interface = _peer_interface(peer)
+    endpoint = await asyncio.to_thread(_validate_a2a_url, interface["url"])
+    payload = {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": method, "params": params}
+    try:
+        peer_tokens = json.loads(os.getenv("A2A_PEER_TOKENS", "{}"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(500, "A2A_PEER_TOKENS must be a JSON object") from exc
+    token = peer_tokens.get(peer["card_url"]) if isinstance(peer_tokens, dict) else None
+    if peer["card"].get("securityRequirements") and not token:
+        raise HTTPException(400, "Remote agent requires authentication; configure its Bearer token in A2A_PEER_TOKENS")
+    headers = {"A2A-Version": "1.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
+        response = await client.post(endpoint, json=payload, headers=headers)
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise HTTPException(502, "Remote server returned an invalid JSON-RPC response")
+    rpc_error = data.get("error")
+    if rpc_error:
+        if not isinstance(rpc_error, dict):
+            raise HTTPException(502, "Remote server returned an invalid JSON-RPC error")
+        raise HTTPException(502, rpc_error.get("message", "Remote A2A error"))
+    if data.get("jsonrpc") != "2.0" or not isinstance(data.get("result"), dict):
+        raise HTTPException(502, "Remote server returned an invalid JSON-RPC response")
+    return data["result"]
+
+
+@app.post("/api/a2a/peers/{peer_id}/tasks")
+async def api_send_a2a_task(peer_id: str, req: A2APeerMessageRequest):
+    peer = get_remote_agent(peer_id)
+    if not peer:
+        raise HTTPException(404, "A2A peer not found")
+    interface = _peer_interface(peer)
+    params: Dict[str, Any] = {"message": {
+        "messageId": str(uuid.uuid4()),
+        "role": "ROLE_USER",
+        "parts": [{"text": req.message}],
+    }, "configuration": {"returnImmediately": True}}
+    if interface.get("tenant"):
+        params["tenant"] = interface["tenant"]
+    try:
+        return {"result": await _call_remote_a2a(peer, "SendMessage", params)}
+    except (ValueError, httpx.HTTPError, json.JSONDecodeError) as exc:
+        raise HTTPException(502, f"Remote A2A request failed: {exc}") from exc
+
+
+@app.post("/api/a2a/peers/{peer_id}/tasks/{task_id}")
+async def api_get_remote_a2a_task(peer_id: str, task_id: str):
+    peer = get_remote_agent(peer_id)
+    if not peer:
+        raise HTTPException(404, "A2A peer not found")
+    try:
+        return {"result": await _call_remote_a2a(peer, "GetTask", {"id": task_id})}
+    except (ValueError, httpx.HTTPError, json.JSONDecodeError) as exc:
+        raise HTTPException(502, f"Remote A2A request failed: {exc}") from exc
 
 @app.post("/api/a2a/send")
 async def send_a2a_message_disabled(req: SendA2AMessageRequest):
@@ -1648,18 +1993,18 @@ async def ide_refactor(req: IDERefactorRequest):
     if not coding_agent:
         # Create a temporary coding agent if none exist
         from core.agent import Agent
-        from core.agent import AgentPersona
+        from core.persona import Persona
         from core.skills import SKILL_REGISTRY
         from core.llm import LLM_ROUTER
         
-        persona = AgentPersona(
+        persona = Persona(
             name="IDE_Coder",
             avatar="💻",
             role="Senior Software Engineer",
             backstory="You are an expert coder integrated directly into a code editor. You refactor files and return clean, efficient code.",
             skills=["code_execute", "file_read", "file_write"]
         )
-        coding_agent = Agent(persona=persona, llm=LLM_ROUTER, skill_registry=SKILL_REGISTRY)
+        coding_agent = Agent(persona=persona, llm_router=LLM_ROUTER, skill_registry=SKILL_REGISTRY)
         
     task_prompt = f"""You are acting as an IDE refactoring assistant.
 Refactor the following file: '{req.filename}' (language: {req.language}).
@@ -1829,4 +2174,10 @@ if __name__ == "__main__":
     print("API: http://localhost:8000")
     print("Studio: http://localhost:8000/studio")
     print("Docs: http://localhost:8000/docs")
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    host = get_api_host()
+    if not is_loopback_host(host):
+        if get_api_token():
+            print(f"API is binding to {host}; protected API routes require Bearer authentication.")
+        else:
+            print(f"WARNING: API is binding to {host} without ADGENTS_API_TOKEN; protected requests will fail closed.")
+    uvicorn.run(app, host=host, port=int(os.getenv("API_PORT", 8000)), reload=False)

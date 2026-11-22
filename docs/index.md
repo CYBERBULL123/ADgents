@@ -42,6 +42,7 @@ For running and using the ADgents application:
 | [**Quickstart**](project/quickstart.md) | Get started in 5 minutes |
 | [**Studio Web UI**](project/studio.md) | Interactive agent management |
 | [**Architecture**](project/architecture.md) | System design overview |
+| [**Agent Cards and A2A**](project/a2a.md) | Publish cards, discover peers, delegate tasks, and inspect responses |
 | [**Crew Coordination**](project/crew.md) | Multi-agent orchestration |
 | [**Real-World Use Cases**](project/use_cases.md) | Practical examples |
 | [**Deployment**](project/deployment.md) | Production setup |

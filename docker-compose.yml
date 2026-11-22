@@ -6,7 +6,7 @@ services:
     image: adgents:latest
     container_name: adgents_server
     ports:
-      - "8000:8000"
+      - "${ADGENTS_BIND_ADDRESS:-127.0.0.1}:8000:8000"
     volumes:
       - ./data:/app/data        # Persist memory databases
       - ./.env:/app/.env        # Map your API keys

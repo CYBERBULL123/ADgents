@@ -53,6 +53,7 @@ class MCPServer:
         self.skill_registry = skill_registry
         self.agents = agents or []
         self._agent_map = {a.persona.id: a for a in self.agents}
+        self.enabled = True
         
         # Log initialization status
         try:
@@ -367,6 +368,8 @@ class MCPServer:
 
         @router.post("/")
         async def mcp_endpoint(request: Request):
+            if not self.enabled:
+                return JSONResponse({"error": "MCP server is stopped"}, status_code=503)
             body = await request.json()
             # Support batch requests (array of requests)
             if isinstance(body, list):
@@ -381,10 +384,14 @@ class MCPServer:
 
         @router.get("/tools")
         async def list_tools():
+            if not self.enabled:
+                return JSONResponse({"error": "MCP server is stopped"}, status_code=503)
             return {"tools": self._list_tools()}
 
         @router.get("/agents")
         async def list_agents():
+            if not self.enabled:
+                return JSONResponse({"error": "MCP server is stopped"}, status_code=503)
             return {"agents": [
                 {"id": a.persona.id, "name": a.persona.name, "role": a.persona.role}
                 for a in self.agents

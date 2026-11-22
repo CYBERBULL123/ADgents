@@ -7,6 +7,7 @@ import subprocess
 import json
 import time
 import traceback
+import os
 import httpx
 from pathlib import Path
 from typing import Callable, Dict, Any, List, Optional
@@ -15,6 +16,11 @@ from dataclasses import dataclass, field
 # Directory for agent-created files
 FILES_DIR = Path(__file__).parent.parent / "data" / "files"
 FILES_DIR.mkdir(parents=True, exist_ok=True)
+UNSAFE_SKILL_NAMES = {"code_execute", "file_read", "file_write", "api_call", "list_directory"}
+
+
+def _enabled(env_name: str) -> bool:
+    return os.getenv(env_name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass
@@ -160,7 +166,7 @@ def _skill_web_search(query: str, num_results: int = 5) -> str:
 
 
 def _skill_code_execute(code: str, language: str = "python") -> str:
-    """Execute code in a subprocess sandbox."""
+    """Execute code in a subprocess without OS-level sandboxing."""
     if language.lower() not in ("python", "python3"):
         return f"Language '{language}' not yet supported. Only Python is available."
     
@@ -323,7 +329,8 @@ class SkillRegistry:
         self.skills_dir = Path(__file__).parent.parent / "data" / "skills"
         self.skills_dir.mkdir(parents=True, exist_ok=True)
         self._register_builtin_skills()
-        self._load_custom_skills()  # Load persisted custom skills
+        if _enabled("ADGENTS_ENABLE_CUSTOM_SKILLS"):
+            self._load_custom_skills()
     
     def _register_builtin_skills(self):
         builtins = [
@@ -541,15 +548,14 @@ class SkillRegistry:
     
     def register_from_code(self, name: str, description: str, handler_code: str,
                            parameters: Dict = None, category: str = "custom") -> Skill:
-        """
-        Register a skill from Python source code.
-        The code must define a function called `handler`.
-        """
+        """Register a trusted Python handler; executing this source is not sandboxed."""
+        if not _enabled("ADGENTS_ENABLE_CUSTOM_SKILLS"):
+            raise ValueError("Python custom skills are disabled; set ADGENTS_ENABLE_CUSTOM_SKILLS=true only for trusted local code")
         import re
         if not re.match(r'^[a-z_][a-z0-9_]*$', name):
             raise ValueError(f"Invalid skill name '{name}'. Use lowercase letters, numbers, underscores.")
         
-        # Execute the code in a sandboxed namespace
+        # Execute trusted handler source in the current process.
         namespace: Dict[str, Any] = {}
         try:
             exec(handler_code, namespace)
@@ -585,9 +591,16 @@ class SkillRegistry:
     
     def get(self, name: str) -> Optional[Skill]:
         return self._skills.get(name)
+
+    def _is_enabled(self, skill: Skill) -> bool:
+        if skill.is_custom:
+            return _enabled("ADGENTS_ENABLE_CUSTOM_SKILLS")
+        if skill.name in UNSAFE_SKILL_NAMES:
+            return _enabled("ADGENTS_ENABLE_UNSAFE_TOOLS")
+        return True
     
     def list(self, category: str = None) -> List[Skill]:
-        skills = list(self._skills.values())
+        skills = [skill for skill in self._skills.values() if self._is_enabled(skill)]
         if category:
             skills = [s for s in skills if s.category == category]
         return skills
@@ -596,11 +609,13 @@ class SkillRegistry:
         skill = self.get(skill_name)
         if not skill:
             return SkillResult(success=False, output=None, error=f"Skill '{skill_name}' not found")
+        if not self._is_enabled(skill):
+            return SkillResult(success=False, output=None, error=f"Skill '{skill_name}' is disabled by the current security policy")
         return skill.execute(**kwargs)
     
     def get_openai_tools(self, skill_names: List[str] = None) -> List[Dict]:
         """Get skills formatted as OpenAI tools."""
-        skills = self._skills.values()
+        skills = self.list()
         if skill_names:
             skills = [s for s in skills if s.name in skill_names]
         return [s.to_openai_tool() for s in skills]

@@ -11,7 +11,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="/studio/style.css?v=3" />
+    <link rel="stylesheet" href="/studio/style.css?v=6" />
     <!-- Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
@@ -103,6 +103,10 @@
         <a class="nav-item" data-page="mcp" onclick="navigate('mcp');closeSidebar()">
             <span class="nav-icon">🔗</span>
             <span>MCP Server</span>
+        </a>
+        <a class="nav-item" data-page="network" onclick="navigate('network');closeSidebar()">
+            <span class="nav-icon">🌐</span>
+            <span>Agent Network</span>
         </a>
 
         <!-- Crew Collaboration removed -->
@@ -508,6 +512,57 @@
                 </div>
             </section>
 
+            <!-- ── AGENT NETWORK ── -->
+            <section class="page" id="page-network">
+                <div class="network-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Remote agents</h3>
+                        </div>
+                        <div class="network-local-card">
+                            <span class="network-label">Local Agent Card</span>
+                            <a id="network-local-card-url" target="_blank" rel="noopener noreferrer"></a>
+                        </div>
+                        <div class="form-group">
+                            <label for="network-card-url">Discover by Agent Card URL</label>
+                            <input id="network-card-url" type="url" placeholder="https://agent.example/.well-known/agent-card.json" />
+                        </div>
+                        <div class="network-add-actions">
+                            <button class="btn btn-primary" onclick="addA2APeer()">＋ Add agent</button>
+                        </div>
+                        <div id="network-peers" class="network-peers">
+                            <div class="empty-state-small">No remote agents connected.</div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>Delegate a task</h3>
+                        </div>
+                        <div class="form-group">
+                            <label for="network-peer-select">Remote agent</label>
+                            <select id="network-peer-select" style="width: 100%;"></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="network-task-message">Task</label>
+                            <textarea id="network-task-message" rows="5" placeholder="Describe the task for the remote agent..." style="width: 100%; resize: vertical;"></textarea>
+                        </div>
+                        <div class="network-send-actions">
+                            <button id="network-send-button" class="btn btn-primary task-run-btn" onclick="sendA2ATask()">➤ Send task</button>
+                        </div>
+                        <div class="network-poll-row">
+                            <input id="network-task-id" type="text" placeholder="Remote task ID" />
+                            <button class="btn btn-ghost" onclick="pollA2ATask()" title="Refresh remote task status">↻</button>
+                        </div>
+                        <div class="network-response-header">
+                            <strong>Responses</strong>
+                            <button class="btn btn-ghost btn-xs" onclick="clearA2ATaskResponses()" title="Clear response log">Clear log</button>
+                        </div>
+                        <pre id="network-task-result" class="network-task-result" aria-live="polite">No responses yet. Send a task or refresh a remote task ID.</pre>
+                    </div>
+                </div>
+            </section>
+
             <!-- ── AGENT OS ── -->
             <section class="page" id="page-agentos">
                 <!-- Metrics Panel -->
@@ -867,13 +922,12 @@
                             <div class="form-group">
                                 <label for="mcp-mode">Mode</label>
                                 <select id="mcp-mode">
-                                    <option value="stdio">stdio (Claude Desktop)</option>
-                                    <option value="sse">SSE (Web Clients)</option>
+                                    <option value="http">HTTP JSON-RPC</option>
                                 </select>
                             </div>
                             <div class="form-group">
-                                <label for="mcp-port">Port (for SSE)</label>
-                                <input type="number" id="mcp-port" value="8001" min="1024" max="65535" />
+                                <label for="mcp-endpoint">Endpoint</label>
+                                <input type="text" id="mcp-endpoint" value="/mcp" readonly />
                             </div>
                             <button class="btn btn-primary" onclick="saveMCPConfig()" style="width:100%;margin-top:0.5rem;">💾 Save Config</button>
                         </div>
@@ -925,6 +979,17 @@
             <!-- ── SETTINGS ── -->
             <section class="page" id="page-settings">
                 <div style="max-width: 800px; margin: 0 auto; padding: 1rem;">
+
+                    <div class="card">
+                        <div class="card-header">
+                            <h3>API Access</h3>
+                        </div>
+                        <div class="form-group">
+                            <label for="api-token">Bearer token</label>
+                            <input type="password" id="api-token" class="form-input" autocomplete="off" />
+                        </div>
+                        <button class="btn btn-primary" onclick="saveApiToken()">Save token for this browser session</button>
+                    </div>
                     
                     <!-- LLM Configuration -->
                     <div class="card">
@@ -1091,7 +1156,7 @@
         </div>
     </div>
 
-    <script src="/studio/app.js?v=12"></script>
+    <script src="/studio/app.js?v=13"></script>
 </body>
 
 </html>

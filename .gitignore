@@ -26,17 +26,11 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Build scripts and CI/CD (for internal use only)
-scripts/
-.github/workflows/
-Makefile
-build_help.py
-RELEASE.md
-BUILD.md
-pytest.ini
+# Private local planning notes
 ACTION_NOW.md
 OPEN_SOURCE_SECURITY.md
-realworld/EXECUTIVE_SUMMARY.md
+realworld/ADGENTS_DEEP_ANALYSIS.md
+realworld/
 
 
 # PyInstaller

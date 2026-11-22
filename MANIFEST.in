@@ -1,5 +1,7 @@
 include README.md
 include requirements.txt
+include .env.example
 recursive-include docs *
 recursive-include studio *
-recursive-include data *
+prune data
+global-exclude __pycache__ *.py[cod] *.db *.sqlite *.sqlite3

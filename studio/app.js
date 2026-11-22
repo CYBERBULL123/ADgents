@@ -1,7 +1,7 @@
 /* ─── ADgents Studio — Main Application JS ───────────────────────── */
 'use strict';
 
-const API = 'http://localhost:8000/api';
+const API = `${window.location.origin}/api`;
 let state = {
     agents: {},
     selectedAgent: null,
@@ -11,6 +11,8 @@ let state = {
     agentOsRefreshTimer: null,
     agentOsRefreshing: false,
     agentOsRefreshQueued: false,
+    networkTaskPollTimer: null,
+    networkTaskResponses: [],
     skills: [],
     agentSkills: [],
     templates: {},
@@ -52,6 +54,7 @@ function navigate(page) {
         tools: ['Tools & Skills', 'Executable tools and Markdown workflows for agents'],
         files: ['Files', 'Browse and download agent-created files'],
         mcp: ['MCP Server', 'Model Context Protocol Integration'],
+        network: ['Agent Network', 'Discover and delegate tasks to A2A agents'],
 
         crews: ['Crew Collaboration', 'Multi-agent team coordination'],
         settings: ['Settings', 'Configure LLM providers and system'],
@@ -82,8 +85,10 @@ function navigate(page) {
         loadAgentSkills();
     }
     if (page === 'mcp') loadMCPPage();
+    if (page === 'network') loadAgentNetwork();
     if (page === 'settings') {
         updateDBConnectionFields();
+        document.getElementById('api-token').value = sessionStorage.getItem('adgents_api_token') || '';
 
         // Load saved preferences
         document.getElementById('org-name').value = localStorage.getItem('org_name') || '';
@@ -103,10 +108,12 @@ function navigate(page) {
 
 // ─── API Helpers ─────────────────────────────────────────────────────────────
 async function api(path, method = 'GET', body = null, timeout = 10000) {
+    const token = sessionStorage.getItem('adgents_api_token');
     const opts = {
         method,
         headers: { 'Content-Type': 'application/json' }
     };
+    if (token) opts.headers.Authorization = `Bearer ${token}`;
     if (body) opts.body = JSON.stringify(body);
     
     const controller = new AbortController();
@@ -118,8 +125,10 @@ async function api(path, method = 'GET', body = null, timeout = 10000) {
         
         if (!res.ok) {
             let errorMsg = `HTTP ${res.status}`;
+            let responseBody = null;
             try {
                 const err = await res.json();
+                responseBody = err;
                 // Handle Pydantic validation errors
                 if (err.detail) {
                     if (Array.isArray(err.detail)) {
@@ -133,7 +142,10 @@ async function api(path, method = 'GET', body = null, timeout = 10000) {
             } catch (parseErr) {
                 // Response wasn't JSON, keep default message
             }
-            throw new Error(errorMsg);
+            const error = new Error(errorMsg);
+            error.status = res.status;
+            error.responseBody = responseBody;
+            throw error;
         }
         return res.json();
     } catch (e) {
@@ -418,17 +430,17 @@ function renderAgentsGrid(filter = '') {
         return `
       <div class="agent-card" onclick="openAgentChat('${a.persona.id}')">
         <div class="agent-card-header">
-          <div class="agent-avatar">${a.persona.avatar}</div>
+                    <div class="agent-avatar">${escapeHtml(a.persona.avatar || '🤖')}</div>
           <div class="agent-info">
-            <div class="agent-name">${a.persona.name}</div>
-            <div class="agent-role">${a.persona.role}</div>
+                        <div class="agent-name">${escapeHtml(a.persona.name)}</div>
+                        <div class="agent-role">${escapeHtml(a.persona.role)}</div>
           </div>
-          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
-            <span class="badge badge-${a.status === 'idle' ? 'green' : 'blue'}">${a.status}</span>
+                    <div class="agent-card-status">
+                        <span class="badge badge-${a.status === 'idle' ? 'green' : 'blue'}">${escapeHtml(a.status || 'active')}</span>
           </div>
         </div>
         <div class="agent-traits">
-          ${traits.map(t => `<span class="trait-chip">${t}</span>`).join('')}
+                    ${traits.map(t => `<span class="trait-chip">${escapeHtml(t)}</span>`).join('')}
         </div>
         <div class="agent-stats-row">
           <div class="agent-stat">
@@ -789,7 +801,11 @@ function connectWebSocket(agentId, forTask = false) {
         };
 
         try {
-            const ws = new WebSocket(`ws://localhost:8000/ws/${agentId}`);
+            const protocols = [];
+            const token = sessionStorage.getItem('adgents_api_token');
+            if (token) protocols.push('adgents', `adgents-auth.${token}`);
+            const wsScheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${wsScheme}//${window.location.host}/ws/${agentId}`, protocols);
             ws.onopen = () => {
                 if (forTask || state.selectedChatAgent === agentId) {
                     state.ws = ws;
@@ -1408,6 +1424,13 @@ function renderSkillsPage() {
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
+
+function saveApiToken() {
+    const token = document.getElementById('api-token').value.trim();
+    if (token) sessionStorage.setItem('adgents_api_token', token);
+    else sessionStorage.removeItem('adgents_api_token');
+    toast(token ? 'API token saved for this browser session' : 'API token cleared', 'success');
+}
 
 async function loadEnvironmentStatus() {
     /**Load and display which LLM providers are configured in environment variables.*/
@@ -2657,18 +2680,16 @@ async function loadMCPPage() {
 
 async function saveMCPConfig() {
     const modeEl = document.getElementById('mcp-mode');
-    const portEl = document.getElementById('mcp-port');
     
-    if (!modeEl || !portEl) {
+    if (!modeEl) {
         toast('Configuration elements missing from page', 'error');
         return;
     }
     
     const mode = modeEl.value;
-    const port = portEl.value;
     
     try {
-        const result = await api('/mcp/configure', 'POST', { mode, port });
+        const result = await api('/mcp/configure', 'POST', { mode });
         if (result.success) {
             toast('MCP configuration saved!', 'success');
         } else {
@@ -2708,6 +2729,149 @@ async function stopMCPServer() {
 }
 
 window.addEventListener('DOMContentLoaded', init);
+
+
+// ─── A2A Agent Network ──────────────────────────────────────────────────────
+
+async function loadAgentNetwork() {
+    const cardLink = document.getElementById('network-local-card-url');
+    if (cardLink) {
+        cardLink.href = `${API.replace(/\/api$/, '')}/.well-known/agent-card.json`;
+        cardLink.textContent = 'Open Agent Card';
+        cardLink.title = cardLink.href;
+    }
+    try {
+        const response = await api('/a2a/peers');
+        renderA2APeers(response.peers || []);
+    } catch (error) {
+        toast(`Could not load remote agents: ${error.message}`, 'error');
+    }
+}
+
+function renderA2APeers(peers) {
+    const list = document.getElementById('network-peers');
+    const select = document.getElementById('network-peer-select');
+    if (!list || !select) return;
+    const selectedId = select.value;
+    select.innerHTML = '<option value="">Select a remote agent</option>' + peers.map(peer =>
+        `<option value="${escapeHtml(peer.id)}">${escapeHtml(peer.name)}</option>`
+    ).join('');
+    if (peers.some(peer => peer.id === selectedId)) select.value = selectedId;
+    list.innerHTML = peers.length ? peers.map(peer => {
+        const skills = (peer.card.skills || []).map(skill => skill.name).join(', ');
+        return `<div class="network-peer-row">
+            <div class="network-peer-copy">
+                <strong>${escapeHtml(peer.name)}</strong>
+                <span>${escapeHtml(peer.description)}</span>
+                <small>${escapeHtml(skills || peer.card_url)}</small>
+            </div>
+            <button class="btn btn-ghost btn-xs" onclick="removeA2APeer('${escapeHtml(peer.id)}')" title="Remove remote agent" aria-label="Remove ${escapeHtml(peer.name)}">×</button>
+        </div>`;
+    }).join('') : '<div class="empty-state-small">No remote agents connected.</div>';
+}
+
+async function addA2APeer() {
+    const input = document.getElementById('network-card-url');
+    const cardUrl = input.value.trim();
+    if (!cardUrl) return toast('Enter an Agent Card URL', 'error');
+    try {
+        const response = await api('/a2a/peers', 'POST', { card_url: cardUrl }, 12000);
+        input.value = '';
+        await loadAgentNetwork();
+        document.getElementById('network-peer-select').value = response.peer.id;
+        toast(`Connected to ${response.peer.name}`, 'success');
+    } catch (error) {
+        toast(error.message, 'error');
+    }
+}
+
+async function removeA2APeer(peerId) {
+    try {
+        await api(`/a2a/peers/${encodeURIComponent(peerId)}`, 'DELETE');
+        await loadAgentNetwork();
+        toast('Remote agent removed', 'info');
+    } catch (error) {
+        toast(error.message, 'error');
+    }
+}
+
+function renderA2ATaskResponses() {
+    const output = document.getElementById('network-task-result');
+    output.textContent = state.networkTaskResponses.length
+        ? state.networkTaskResponses.map(entry => `${entry.time} | ${entry.label}\n${JSON.stringify(entry.payload, null, 2)}`).join('\n\n')
+        : 'No responses yet. Send a task or refresh a remote task ID.';
+    output.scrollTop = output.scrollHeight;
+}
+
+function logA2ATaskResponse(label, payload) {
+    state.networkTaskResponses.push({ time: new Date().toLocaleTimeString(), label, payload });
+    renderA2ATaskResponses();
+}
+
+function clearA2ATaskResponses() {
+    state.networkTaskResponses = [];
+    renderA2ATaskResponses();
+}
+
+function showA2ATaskResult(response, label) {
+    logA2ATaskResponse(label, response);
+    const result = response && response.result;
+    const task = result && (result.task || result);
+    const taskId = task && task.id;
+    if (taskId) document.getElementById('network-task-id').value = taskId;
+    return task && task.status && ['TASK_STATE_WORKING', 'TASK_STATE_SUBMITTED'].includes(task.status.state);
+}
+
+function scheduleA2ATaskPoll() {
+    clearTimeout(state.networkTaskPollTimer);
+    state.networkTaskPollTimer = setTimeout(() => {
+        if (document.getElementById('page-network')?.classList.contains('active')) pollA2ATask(true);
+    }, 2500);
+}
+
+async function sendA2ATask() {
+    const peerId = document.getElementById('network-peer-select').value;
+    const message = document.getElementById('network-task-message').value.trim();
+    if (!peerId) return toast('Select a remote agent', 'error');
+    if (!message) return toast('Describe the task to send', 'error');
+    const button = document.getElementById('network-send-button');
+    button.disabled = true;
+    try {
+        const response = await api(`/a2a/peers/${encodeURIComponent(peerId)}/tasks`, 'POST', { message }, 70000);
+        if (showA2ATaskResult(response, 'SendMessage response')) scheduleA2ATaskPoll();
+        toast('Remote task submitted', 'success');
+    } catch (error) {
+        logA2ATaskResponse('SendMessage error', {
+            status: error.status ?? null,
+            message: error.message,
+            response: error.responseBody ?? null
+        });
+        toast(error.message, 'error');
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function pollA2ATask(silent = false) {
+    clearTimeout(state.networkTaskPollTimer);
+    const peerId = document.getElementById('network-peer-select').value;
+    const taskId = document.getElementById('network-task-id').value.trim();
+    if (!peerId || !taskId) {
+        if (!silent) toast('Select a peer and enter a remote task ID', 'error');
+        return;
+    }
+    try {
+        const response = await api(`/a2a/peers/${encodeURIComponent(peerId)}/tasks/${encodeURIComponent(taskId)}`, 'POST', null, 70000);
+        if (showA2ATaskResult(response, silent ? 'GetTask poll response' : 'GetTask response')) scheduleA2ATaskPoll();
+    } catch (error) {
+        logA2ATaskResponse('GetTask error', {
+            status: error.status ?? null,
+            message: error.message,
+            response: error.responseBody ?? null
+        });
+        if (!silent) toast(error.message, 'error');
+    }
+}
 
 
 // ─── Crew Collaboration (removed) ───────────────────────────────────────────

@@ -43,9 +43,9 @@ class OpenAIProvider(BaseLLMProvider):
     
     name = "openai"
     
-    def __init__(self, api_key: str = None, model: str = "gpt-4o-mini"):
+    def __init__(self, api_key: str = None, model: str = None):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
-        self.model = model
+        self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         self.base_url = "https://api.openai.com/v1"
     
     def is_available(self) -> bool:
@@ -104,9 +104,9 @@ class GeminiProvider(BaseLLMProvider):
     
     name = "gemini"
     
-    def __init__(self, api_key: str = None, model: str = "gemini-1.5-flash"):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
-        self.model = model
+    def __init__(self, api_key: str = None, model: str = None):
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
+        self.model = model or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
     
     def is_available(self) -> bool:
@@ -220,9 +220,9 @@ class AnthropicProvider(BaseLLMProvider):
     
     name = "claude"
     
-    def __init__(self, api_key: str = None, model: str = "claude-3-5-sonnet-20241022"):
+    def __init__(self, api_key: str = None, model: str = None):
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
-        self.model = model
+        self.model = model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
         self.base_url = "https://api.anthropic.com/v1"
     
     def is_available(self) -> bool:
@@ -442,6 +442,12 @@ class LLMRouter:
                 self.register(ollama)
         except Exception:
             pass  # Ollama not available, skip
+
+    def reload_from_environment(self):
+        """Refresh providers without invalidating references held by agents."""
+        refreshed = type(self)()
+        self._providers = refreshed._providers
+        self._default_provider = refreshed._default_provider
     
     def register(self, provider: BaseLLMProvider):
         self._providers[provider.name] = provider

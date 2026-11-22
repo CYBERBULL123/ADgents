@@ -15,6 +15,7 @@ Documentation for running and using the ADgents project.
 | Topic | Guide | Learn |
 |-------|-------|-------|
 | **Architecture** | [System Design](architecture.md) | How ADgents is built |
+| **Agent Network** | [Agent Cards and A2A](a2a.md) | Publish cards, discover peers, delegate tasks, and inspect responses |
 | **Crews** | [Crew Coordination](crew.md) | Multi-agent orchestration |
 | **Deployment** | [Production Setup](deployment.md) | Deploy at scale |
 

@@ -239,11 +239,14 @@ DEFAULT_LLM_PROVIDER=gemini
 ### Server Configuration
 
 ```bash
-API_HOST=0.0.0.0
+API_HOST=127.0.0.1
 API_PORT=8000
 DEBUG=false
 LOG_LEVEL=INFO
+ADGENTS_API_TOKEN=<long-random-token>
 ```
+
+The API binds to loopback by default. For non-loopback access, set `ADGENTS_API_TOKEN`; protected REST, MCP, A2A task, and WebSocket calls require a Bearer token. Requests fail closed if the API is bound to a non-loopback address without a token. This shared token is not per-user authorization; use HTTPS and a trusted network boundary. Browser origins are restricted to local Studio origins by default; configure `ADGENTS_CORS_ORIGINS` as a comma-separated allowlist when needed. The Python SDK accepts `api_token=` or reads `ADGENTS_API_TOKEN` from the environment.
 
 ---
 

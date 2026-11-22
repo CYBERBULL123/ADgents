@@ -85,10 +85,13 @@ DEFAULT_LLM_MODEL=gemini-1.5-flash  # Override default model for selected provid
 #### Server Configuration
 
 ```bash
-# Server Setup
-SERVER_HOST=0.0.0.0
-SERVER_PORT=8000
+# Server Setup (local development defaults)
+API_HOST=127.0.0.1
+API_PORT=8000
 DEBUG=false
+
+# Required for non-loopback access; protected API/MCP/A2A task/WebSocket calls then need Bearer auth
+ADGENTS_API_TOKEN=<long-random-token>
 
 # File Storage
 DATA_DIR=./data
@@ -263,13 +266,9 @@ python start.py
 
 Access the Studio UI at: **http://localhost:8000/studio**
 
-### Production Mode
+### Deployment Note
 
-Using Uvicorn with multiple workers:
-
-```bash
-uvicorn server:app --host 0.0.0.0 --port 8000 --workers 4
-```
+The API binds to loopback by default. For non-loopback access, configure `ADGENTS_API_TOKEN`; protected REST, MCP, A2A task, and WebSocket requests require `Authorization: Bearer <token>`. Requests fail closed if a non-loopback bind has no token. Use HTTPS for remote traffic. The token is shared across clients, not per-user authorization, and agent/task state remains process-local; do not run multiple workers. The Docker Compose port is bound to loopback by default; changing `ADGENTS_BIND_ADDRESS` exposes it on another interface.
 
 ### Using Docker Compose
 

@@ -28,13 +28,22 @@ dependencies = [
     "aiofiles>=24.1.0"
 ]
 
+  [project.optional-dependencies]
+  dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0"
+  ]
+
 [project.urls]
 "Homepage" = "https://github.com/CYBERBULL123/ADgents"
 "Bug Tracker" = "https://github.com/CYBERBULL123/ADgents/issues"
 
 [tool.setuptools]
-packages = ["core"]
+packages = ["core", "sdk", "sdk.python", "studio"]
 py-modules = ["start", "server", "cli"]
 
+[tool.setuptools.package-data]
+studio = ["*.html", "*.js", "*.css"]
+
 [project.scripts]
-adgents = "start:check_environment"
+adgents = "start:main"
